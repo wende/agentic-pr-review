@@ -95,6 +95,115 @@ test('coordinator gets a wrap-up phase before the hard iteration ceiling', () =>
   assert.match(selfReview, /load-public-skills: 'false'/);
 });
 
+test('wrap-up steering follows the initialized agent created during plugin loading', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agentic-wrap-up-'));
+  const openhands = join(root, 'openhands');
+  const upstream = join(root, 'agent_script.py');
+  await mkdir(openhands);
+  await writeFile(
+    join(root, 'litellm.py'),
+    'model_cost = {}\n',
+  );
+  await writeFile(
+    join(openhands, '__init__.py'),
+    '',
+  );
+  await writeFile(
+    join(openhands, 'sdk.py'),
+    `from copy import copy
+
+class MessageEvent:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+class Message:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+class TextContent:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+class LLM:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+class FakeAgent:
+    def __init__(self):
+        self._initialized = False
+        self.steps = 0
+
+    def model_copy(self):
+        return copy(self)
+
+    def initialize(self):
+        self._initialized = True
+
+    def step(self, conversation, **kwargs):
+        if not self._initialized:
+            raise RuntimeError("Agent not initialized; call _initialize() before use")
+        self.steps += 1
+
+class Conversation:
+    def __init__(self, agent, max_iteration_per_run=None):
+        self.agent = agent
+        self.max_iteration_per_run = max_iteration_per_run
+        self.events = []
+        self.ready = False
+
+    def _on_event(self, event):
+        self.events.append(event)
+
+    def _ensure_agent_ready(self):
+        if self.ready:
+            return
+        self.agent = self.agent.model_copy()
+        self.agent.initialize()
+        self.ready = True
+
+    def run(self):
+        self._ensure_agent_ready()
+        for _ in range(3):
+            self.agent.step(self)
+        assert self.agent.steps == 3
+        assert len(self.events) == 1
+        assert self.max_iteration_per_run == 4
+`,
+  );
+  await writeFile(
+    upstream,
+    `from openhands.sdk import Conversation, FakeAgent, LLM
+
+def main():
+    LLM(model="test")
+    conversation = Conversation(FakeAgent())
+    conversation.run()
+`,
+  );
+
+  try {
+    const result = await execFileAsync(
+      'python3',
+      [fileURLToPath(new URL('../scripts/run-agent.py', import.meta.url)), upstream],
+      {
+        env: {
+          ...process.env,
+          LLM_MODEL: 'test',
+          MAX_REVIEW_ITERATIONS: '4',
+          PYTHONPATH: root,
+          REVIEW_WRAP_UP_ITERATIONS: '2',
+        },
+      },
+    );
+    assert.match(
+      result.stdout,
+      /Injected review wrap-up instruction after 2 completed iterations/,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('review protocol obeys the runtime wrap-up phase and requires publication', () => {
   assert.match(skill, /environment wrap-up message/);
   assert.match(skill, /hard phase change/);

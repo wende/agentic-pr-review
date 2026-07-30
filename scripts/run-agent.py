@@ -71,6 +71,39 @@ def steer_agent_to_wrap_up(agent: object, wrap_up_iterations: int) -> None:
     )
 
 
+def steer_conversation_to_wrap_up(
+    conversation: object,
+    wrap_up_iterations: int,
+) -> None:
+    # Plugin loading creates a Pydantic copy of the agent, so installing the
+    # step wrapper before the SDK's lazy initialization would bind it to an
+    # abandoned, uninitialized object. Attach it immediately after that
+    # lifecycle phase instead.
+    original_ensure_agent_ready = conversation._ensure_agent_ready
+    steering_installed = False
+
+    def ensure_agent_ready_then_steer(
+        _conversation: object,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        nonlocal steering_installed
+        result = original_ensure_agent_ready(*args, **kwargs)
+        if not steering_installed:
+            steer_agent_to_wrap_up(
+                _conversation.agent,
+                wrap_up_iterations,
+            )
+            steering_installed = True
+        return result
+
+    object.__setattr__(
+        conversation,
+        "_ensure_agent_ready",
+        MethodType(ensure_agent_ready_then_steer, conversation),
+    )
+
+
 def configured_symbols(
     model: str,
     wrap_up_iterations: int,
@@ -103,13 +136,12 @@ def configured_symbols(
 
     def bounded_conversation(*args: object, **kwargs: object) -> object:
         kwargs.setdefault("max_iteration_per_run", max_iterations)
-        agent = kwargs.get("agent")
-        if agent is None and args:
-            agent = args[0]
-        if agent is None:
-            raise RuntimeError("Conversation requires an agent")
-        steer_agent_to_wrap_up(agent, wrap_up_iterations)
-        return original_conversation(*args, **kwargs)
+        conversation = original_conversation(*args, **kwargs)
+        steer_conversation_to_wrap_up(
+            conversation,
+            wrap_up_iterations,
+        )
+        return conversation
 
     return telemetry_priced_llm, bounded_conversation
 
