@@ -34,12 +34,12 @@ if [[ "$decision" == "no_candidate" ]]; then
   if ! jq -e '
     .decision_version == 1 and
     .decision == "no_candidate" and
-    (.reason | IN(
-      "no_previous_review",
-      "no_previous_inline_comments",
-      "no_applied_feedback",
-      "no_generalizable_lesson"
-    )) and
+    (
+      .reason == "no_previous_review" or
+      .reason == "no_previous_inline_comments" or
+      .reason == "no_applied_feedback" or
+      .reason == "no_generalizable_lesson"
+    ) and
     (.details | type == "string" and length > 0 and length <= 1000)
   ' "$decision_path" >/dev/null; then
     echo "::error::Invalid no-candidate memory decision"

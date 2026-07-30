@@ -44,6 +44,10 @@ const evaluateMemory = fileURLToPath(
 const publishMemory = fileURLToPath(
   new URL('../scripts/publish-memory.sh', import.meta.url),
 );
+const ensureReviewMarker = fileURLToPath(
+  new URL('../scripts/ensure-review-marker.sh', import.meta.url),
+);
+const ensureReviewMarkerSource = await readFile(ensureReviewMarker, 'utf8');
 const runAgent = await readFile(
   new URL('../scripts/run-agent.py', import.meta.url),
   'utf8',
@@ -83,6 +87,7 @@ test('coordinator gets a wrap-up phase before the hard iteration ceiling', () =>
   assert.equal((action.match(/default: '60'/g) ?? []).length, 1);
   assert.match(action, /MAX_REVIEW_ITERATIONS/);
   assert.match(runAgent, /max_iteration_per_run/);
+  assert.match(runAgent, /kwargs\["max_iteration_per_run"\] = max_iterations/);
   assert.match(runAgent, /steer_agent_to_wrap_up/);
   assert.match(runAgent, /Injected review wrap-up instruction/);
   assert.match(runAgent, /Stop investigating now/);
@@ -209,9 +214,13 @@ test('review protocol obeys the runtime wrap-up phase and requires publication',
   assert.match(skill, /hard phase change/);
   assert.match(skill, /remaining grace period/);
   assert.match(skill, /review is not complete until that\s+marked review is posted/);
-  assert.match(action, /Agent exited without posting a new marked review/);
-  assert.match(action, /previous_marked_review_id/);
-  assert.match(action, /startsWith|startswith/);
+  assert.match(
+    ensureReviewMarkerSource,
+    /Agent exited without posting a new review/,
+  );
+  assert.match(ensureReviewMarkerSource, /Added the agentic review marker/);
+  assert.match(action, /previous_review_id/);
+  assert.match(action, /scripts\/ensure-review-marker\.sh/);
 });
 
 test('follow-up reviews use a stable marker and explicit classifications', () => {
@@ -232,6 +241,58 @@ test('reviews do not include the unused reaction feedback footer', () => {
     action,
     /collect-feedback|COLLECT_FEEDBACK|REVIEW_RUN_URL/,
   );
+});
+
+test('a fresh bot review is deterministically marked after publication', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agentic-review-marker-'));
+  const bin = join(root, 'bin');
+  const fakeGh = join(bin, 'gh');
+  const updateRecord = join(root, 'updated-review.json');
+  const head = 'd'.repeat(40);
+  await mkdir(bin);
+  await writeFile(
+    fakeGh,
+    `#!/usr/bin/env bash
+set -euo pipefail
+args="$*"
+if [[ "$args" == *"-X PUT"*"/reviews/12"* ]]; then
+  tee "$UPDATE_RECORD" >/dev/null
+  printf '%s\\n' '{}'
+elif [[ "$args" == *"/reviews/12"* ]]; then
+  printf '%s\\n' '{"id":12,"commit_id":"${head}","body":"<!-- agentic-pr-review -->\\n\\nReview without a model-supplied marker.","user":{"login":"github-actions[bot]"}}'
+elif [[ "$args" == *"/reviews?per_page=100"* ]]; then
+  printf '%s\\n' '[[{"id":10,"commit_id":"${head}","body":"<!-- agentic-pr-review -->\\nOld review.","user":{"login":"github-actions[bot]"}},{"id":12,"commit_id":"${head}","body":"Review without a model-supplied marker.","user":{"login":"github-actions[bot]"}},{"id":13,"commit_id":"${head}","body":"External review.","user":{"login":"sourcery-ai[bot]"}}]]'
+else
+  echo "unexpected gh invocation: $args" >&2
+  exit 2
+fi
+`,
+  );
+  await chmod(fakeGh, 0o755);
+
+  try {
+    const result = await execFileAsync(
+      ensureReviewMarker,
+      ['example/repo', '5', head, '10'],
+      {
+        env: {
+          ...process.env,
+          GH_TOKEN: 'test-token',
+          PATH: `${bin}:${process.env.PATH}`,
+          UPDATE_RECORD: updateRecord,
+        },
+      },
+    );
+    const update = JSON.parse(await readFile(updateRecord, 'utf8'));
+    assert.match(
+      update.body,
+      /^<!-- agentic-pr-review -->\n\nReview without a model-supplied marker\.$/,
+    );
+    assert.match(result.stdout, /Added the agentic review marker to review #12/);
+    assert.match(result.stdout, /Verified marked review #12/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test('persistent memory is prepared and passed to the reviewer', () => {

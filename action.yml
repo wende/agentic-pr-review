@@ -229,14 +229,14 @@ runs:
       run: |
         cd agentic-review-repo
         head_commit="$(git rev-parse HEAD)"
-        previous_marked_review_id="$(
+        previous_review_id="$(
           gh api --paginate --slurp \
             "repos/${REPO_NAME}/pulls/${PR_NUMBER}/reviews?per_page=100" |
             jq --arg sha "$head_commit" '
               (if length > 0 and (.[0] | type) == "array" then add else . end)
               | map(select(
                   .commit_id == $sha and
-                  ((.body // "") | startswith("<!-- agentic-pr-review -->"))
+                  .user.login == "github-actions[bot]"
                 ))
               | map(.id)
               | max // 0
@@ -249,23 +249,11 @@ runs:
           python "$GITHUB_ACTION_PATH/scripts/run-agent.py" \
             ../agentic-review-extensions/plugins/pr-review/scripts/agent_script.py
 
-        current_marked_review_id="$(
-          gh api --paginate --slurp \
-            "repos/${REPO_NAME}/pulls/${PR_NUMBER}/reviews?per_page=100" |
-            jq --arg sha "$head_commit" '
-              (if length > 0 and (.[0] | type) == "array" then add else . end)
-              | map(select(
-                  .commit_id == $sha and
-                  ((.body // "") | startswith("<!-- agentic-pr-review -->"))
-                ))
-              | map(.id)
-              | max // 0
-            '
-        )"
-        if [[ "$current_marked_review_id" -le "$previous_marked_review_id" ]]; then
-          echo "::error::Agent exited without posting a new marked review for $head_commit"
-          exit 1
-        fi
+        "$GITHUB_ACTION_PATH/scripts/ensure-review-marker.sh" \
+          "$REPO_NAME" \
+          "$PR_NUMBER" \
+          "$head_commit" \
+          "$previous_review_id"
 
     - name: Evaluate repository memory
       if: inputs.memory-enabled == 'true' && steps.memory.outputs.issue-number != ''

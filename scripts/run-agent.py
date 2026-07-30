@@ -135,7 +135,7 @@ def configured_symbols(
         return original_llm(*args, **kwargs)
 
     def bounded_conversation(*args: object, **kwargs: object) -> object:
-        kwargs.setdefault("max_iteration_per_run", max_iterations)
+        kwargs["max_iteration_per_run"] = max_iterations
         conversation = original_conversation(*args, **kwargs)
         steer_conversation_to_wrap_up(
             conversation,
