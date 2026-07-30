@@ -28,7 +28,7 @@ inputs:
   max-review-iterations:
     description: Maximum model/tool iterations for the coordinator and each delegated agent
     required: false
-    default: '50'
+    default: '40'
   load-public-skills:
     description: Load the OpenHands public skill catalog
     required: false

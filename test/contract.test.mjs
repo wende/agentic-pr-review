@@ -66,9 +66,12 @@ test('MiniMax keeps its adapter behavior while supplying telemetry prices', () =
 
 test('coordinator and delegated reviews have an iteration ceiling', () => {
   assert.match(action, /max-review-iterations:/);
-  assert.match(action, /default: '50'/);
+  assert.match(action, /default: '40'/);
   assert.match(action, /MAX_REVIEW_ITERATIONS/);
   assert.match(runAgent, /max_iteration_per_run/);
+  assert.match(runAgent, /_agentic_pr_review_upstream/);
+  assert.match(runAgent, /agent_main\.__globals__\["Conversation"\]/);
+  assert.doesNotMatch(runAgent, /openhands\.sdk\.(LLM|Conversation)\s*=/);
   assert.match(selfReview, /use-sub-agents: 'false'/);
   assert.match(selfReview, /load-public-skills: 'false'/);
 });

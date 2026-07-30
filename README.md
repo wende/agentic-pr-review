@@ -107,7 +107,7 @@ Important inputs:
 | `llm-model` | `openai/MiniMax-M3` | LiteLLM model identifier |
 | `llm-base-url` | MiniMax API | OpenAI-compatible endpoint |
 | `use-sub-agents` | `true` | File-level delegation for large reviews |
-| `max-review-iterations` | `50` | Turn ceiling for the coordinator and each sub-agent |
+| `max-review-iterations` | `40` | Turn ceiling for the coordinator and each sub-agent |
 | `load-public-skills` | `true` | OpenHands public skill catalog |
 | `require-evidence` | `false` | Require end-to-end PR evidence |
 | `review-guidance-path` | empty | Plain Markdown review rules from the consumer |

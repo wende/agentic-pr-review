@@ -18,7 +18,7 @@ MODEL_COST_ALIASES = {
     "openai/MiniMax-M3": "minimax/MiniMax-M3",
 }
 
-def configure_sdk(model: str, max_iterations: int) -> None:
+def configured_symbols(model: str, max_iterations: int) -> tuple[object, object]:
     canonical_model = MODEL_COST_ALIASES.get(model)
     canonical_info = (
         litellm.model_cost.get(canonical_model)
@@ -48,8 +48,7 @@ def configure_sdk(model: str, max_iterations: int) -> None:
         kwargs.setdefault("max_iteration_per_run", max_iterations)
         return original_conversation(*args, **kwargs)
 
-    openhands.sdk.LLM = telemetry_priced_llm
-    openhands.sdk.Conversation = bounded_conversation
+    return telemetry_priced_llm, bounded_conversation
 
 
 def main() -> None:
@@ -61,14 +60,24 @@ def main() -> None:
         raise SystemExit(f"review agent script not found: {agent_script}")
 
     try:
-        max_iterations = int(os.environ.get("MAX_REVIEW_ITERATIONS", "50"))
+        max_iterations = int(os.environ.get("MAX_REVIEW_ITERATIONS", "40"))
     except ValueError as error:
         raise SystemExit("MAX_REVIEW_ITERATIONS must be a positive integer") from error
     if max_iterations < 1:
         raise SystemExit("MAX_REVIEW_ITERATIONS must be a positive integer")
 
-    configure_sdk(os.environ.get("LLM_MODEL", ""), max_iterations)
-    runpy.run_path(str(agent_script), run_name="__main__")
+    llm_factory, conversation_factory = configured_symbols(
+        os.environ.get("LLM_MODEL", ""),
+        max_iterations,
+    )
+    agent_globals = runpy.run_path(
+        str(agent_script),
+        run_name="_agentic_pr_review_upstream",
+    )
+    agent_main = agent_globals["main"]
+    agent_main.__globals__["LLM"] = llm_factory
+    agent_main.__globals__["Conversation"] = conversation_factory
+    agent_main()
 
 
 if __name__ == "__main__":
