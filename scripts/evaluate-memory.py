@@ -20,6 +20,55 @@ MODEL_NO_CANDIDATE_REASONS = {
     "no_generalizable_lesson",
 }
 MAX_DIFF_CHARS = 80_000
+MEMORY_DECISION_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "record_memory_decision",
+        "description": (
+            "Record one validated repository-memory candidate or explain why "
+            "none qualifies."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "decision_version": {
+                    "type": "integer",
+                    "enum": [1],
+                },
+                "decision": {
+                    "type": "string",
+                    "enum": ["candidate", "no_candidate"],
+                },
+                "source_comment_id": {"type": "integer"},
+                "lesson": {"type": "string"},
+                "original_concern": {"type": "string"},
+                "applied_fix": {"type": "string"},
+                "evidence": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "description": {"type": "string"},
+                        },
+                        "required": ["path", "description"],
+                        "additionalProperties": False,
+                    },
+                },
+                "reason": {
+                    "type": "string",
+                    "enum": [
+                        "no_applied_feedback",
+                        "no_generalizable_lesson",
+                    ],
+                },
+                "details": {"type": "string"},
+            },
+            "required": ["decision_version", "decision"],
+            "additionalProperties": False,
+        },
+    },
+}
 
 
 def command(*args: str) -> str:
@@ -331,10 +380,29 @@ def main() -> None:
         max_tokens=1400,
         timeout=120,
         num_retries=0,
+        tools=[MEMORY_DECISION_TOOL],
+        tool_choice={
+            "type": "function",
+            "function": {"name": "record_memory_decision"},
+        },
     )
-    content = response.choices[0].message.content
+    message = response.choices[0].message
+    tool_calls = getattr(message, "tool_calls", None)
+    if tool_calls:
+        tool_call = tool_calls[0]
+        function = getattr(tool_call, "function", None)
+        if (
+            function is None
+            or getattr(function, "name", None) != "record_memory_decision"
+        ):
+            raise RuntimeError("memory evaluator called an unexpected tool")
+        content = getattr(function, "arguments", None)
+    else:
+        # Preserve compatibility with providers that obey the JSON-only prompt
+        # but do not implement forced OpenAI-compatible tool choice.
+        content = message.content
     if not isinstance(content, str):
-        raise RuntimeError("memory evaluator returned no text")
+        raise RuntimeError("memory evaluator returned no decision")
     decision = validate_decision(
         parse_model_json(content),
         {int(comment["id"]) for comment in previous_comments},

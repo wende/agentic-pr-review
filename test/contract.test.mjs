@@ -719,6 +719,9 @@ from types import SimpleNamespace
 
 def completion(**kwargs):
     assert len(kwargs["messages"]) == 2
+    assert kwargs["num_retries"] == 0
+    assert kwargs["tool_choice"]["function"]["name"] == "record_memory_decision"
+    assert kwargs["tools"][0]["function"]["name"] == "record_memory_decision"
     payload = json.loads(kwargs["messages"][1]["content"])
     assert payload["previous_inline_comments"][0]["id"] == 123
     result = {
@@ -733,7 +736,12 @@ def completion(**kwargs):
             "description": "The broad rule became an explicit identity check.",
         }],
     }
-    message = SimpleNamespace(content=json.dumps(result))
+    function = SimpleNamespace(
+        name="record_memory_decision",
+        arguments=json.dumps(result),
+    )
+    tool_call = SimpleNamespace(function=function)
+    message = SimpleNamespace(content=None, tool_calls=[tool_call])
     return SimpleNamespace(choices=[SimpleNamespace(message=message)])
 `,
   );
