@@ -33,13 +33,15 @@ checkpoint while still examining the complete current pull request:
 4. Find genuinely new issues across all current PR changes, including
    interactions between recent commits and older changes in the same PR.
 
-After the marker, begin the top-level review body with a concise
-`Previous review follow-up` section. List resolved, still-present, and obsolete
-findings, or state that the previous review had no actionable findings. Follow
-it with a `New findings` section. On the first marked review, say so briefly and
-omit the classification.
+Keep the review layout the code review instructions already define: taste
+rating, then the issue sections, then the risk assessment and verdict. Add one
+concise `Previous review follow-up` section directly after the taste rating,
+listing resolved, still present, and obsolete findings, or stating that the
+previous review had no actionable findings. Report the findings themselves in
+the sections that layout already provides; do not add a separate list for them.
+On the first marked review, say so briefly and omit the classification.
 
-Do not post a duplicate inline comment for an unchanged, still-present finding;
+Do not post a duplicate inline comment for an unchanged, still present finding;
 reference it in the follow-up summary. Post inline comments for new findings,
 materially changed failure modes, or incomplete fixes that need new evidence.
 Read other reviewers' comments too and do not duplicate still-relevant findings.

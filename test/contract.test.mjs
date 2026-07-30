@@ -27,6 +27,9 @@ const installGuidance = fileURLToPath(
 const followupSkillPath = fileURLToPath(
   new URL('../skills/follow-up-review.md', import.meta.url),
 );
+const checkPrSize = fileURLToPath(
+  new URL('../scripts/check-pr-size.sh', import.meta.url),
+);
 const memorySkillPath = fileURLToPath(
   new URL('../skills/repository-memory.md', import.meta.url),
 );
@@ -267,6 +270,17 @@ test('follow-up reviews use a stable marker and explicit classifications', () =>
   assert.match(skill, /\*\*still present\*\*/);
   assert.match(skill, /\*\*obsolete\*\*/);
   assert.match(skill, /Do not post a duplicate inline comment/);
+  // Classification vocabulary is two words, not hyphenated.
+  assert.doesNotMatch(skill, /still-present/);
+  assert.doesNotMatch(memoryEvaluatorPrompt, /still-present/);
+});
+
+test('follow-up protocol defers to the code review layout', () => {
+  // Both skills trigger on /codereview and the code review skill is injected
+  // last, so a competing layout here is one the reviewer has to reconcile on
+  // every run. Slot the follow-up section into that layout instead.
+  assert.match(skill, /Keep the review layout the code review instructions/);
+  assert.doesNotMatch(skill, /`New findings`/);
 });
 
 test('plain repository guidance is wrapped as a codereview skill', () => {
@@ -421,7 +435,7 @@ test('memory is learned only from applied, generalizable inline feedback', () =>
   assert.match(memoryEvaluatorPrompt, /immediately previous marked review/);
   assert.match(memoryEvaluatorPrompt, /changes since that review demonstrably applied/);
   assert.match(memoryEvaluatorPrompt, /how the implementation changed/);
-  assert.match(memoryEvaluatorPrompt, /Reject still-present or obsolete findings/);
+  assert.match(memoryEvaluatorPrompt, /Reject still present or obsolete findings/);
   assert.match(memoryEvaluatorPrompt, /Reject typos/);
   assert.match(memoryEvaluatorPrompt, /source_comment_id/);
   assert.match(memoryEvaluatorPrompt, /no_candidate/);
@@ -815,6 +829,77 @@ def completion(**kwargs):
   }
 });
 
+test('memory evaluator skips when a previous review commit is unavailable', async () => {
+  // Force-push rewrites leave the prior review's commit_id on GitHub while the
+  // checkout only has the new history; git diff exits 128. That must yield a
+  // no-candidate decision rather than failing the job after a successful review.
+  const root = await mkdtemp(join(tmpdir(), 'agentic-memory-orphan-'));
+  const bin = join(root, 'bin');
+  const fakeGh = join(bin, 'gh');
+  const fakeGit = join(bin, 'git');
+  const decisionPath = join(root, 'decision.json');
+  const previousHead = 'b'.repeat(40);
+  const currentHead = 'c'.repeat(40);
+  await mkdir(bin);
+  await writeFile(
+    fakeGh,
+    `#!/usr/bin/env bash
+set -euo pipefail
+args="$*"
+if [[ "$args" == *"/pulls/5/reviews"* ]]; then
+  printf '%s\\n' '[[{"id":22,"commit_id":"${previousHead}","submitted_at":"2026-07-30T10:00:00Z","body":"<!-- agentic-pr-review -->\\nReview.","user":{"login":"github-actions[bot]"}},{"id":23,"commit_id":"${currentHead}","submitted_at":"2026-07-30T11:00:00Z","body":"<!-- agentic-pr-review -->\\nFollow-up.","user":{"login":"github-actions[bot]"}}]]'
+elif [[ "$args" == *"/pulls/5/comments"* ]]; then
+  printf '%s\\n' '[[{"id":123,"pull_request_review_id":22,"path":"src/trust.py","line":7,"body":"Trust only an explicit automation identity.","html_url":"https://github.com/example/repo/pull/5#discussion_r123","user":{"login":"github-actions[bot]"}}]]'
+else
+  echo "unexpected gh invocation: $args" >&2
+  exit 2
+fi
+`,
+  );
+  await writeFile(
+    fakeGit,
+    `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == "rev-parse HEAD" ]]; then
+  printf '%s\\n' '${currentHead}'
+elif [[ "$1" == "diff" ]]; then
+  # Match real git when either commit is missing after a force-push.
+  echo "fatal: bad object ${previousHead}" >&2
+  exit 128
+else
+  echo "unexpected git invocation: $*" >&2
+  exit 2
+fi
+`,
+  );
+  await chmod(fakeGh, 0o755);
+  await chmod(fakeGit, 0o755);
+
+  try {
+    await execFileAsync(
+      'python3',
+      [evaluateMemory, fileURLToPath(
+        new URL('../skills/memory-evaluator.md', import.meta.url),
+      ), decisionPath],
+      {
+        env: {
+          ...process.env,
+          GH_TOKEN: 'test-token',
+          PATH: `${bin}:${process.env.PATH}`,
+          PR_NUMBER: '5',
+          REPO_NAME: 'example/repo',
+        },
+      },
+    );
+    const decision = JSON.parse(await readFile(decisionPath, 'utf8'));
+    assert.equal(decision.decision, 'no_candidate');
+    assert.equal(decision.reason, 'previous_commit_unavailable');
+    assert.match(decision.details, /force-push|rewritten/i);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('memory publisher validates and appends a candidate idempotency marker', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agentic-memory-publish-'));
   const bin = join(root, 'bin');
@@ -892,6 +977,80 @@ fi
     assert.match(published, /agentic-pr-review-memory-entry/);
     assert.match(published, /agentic-pr-review-source-comment:123/);
     assert.match(published, /Trust automation identities explicitly/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+
+test('every step after the size gate is gated on it', () => {
+  // A step added without the guard would run on an oversized pull request,
+  // which is exactly the cost this gate exists to avoid.
+  const steps = action.match(/^ {4}- name:/gm) ?? [];
+  // Compound conditions (e.g. memory steps) still count when they include the
+  // size gate; only the exact skip-guard form is required for pure steps.
+  const guards =
+    action.match(/^ {6}if:.*steps\.size\.outputs\.oversized != 'true'/gm) ?? [];
+  // The gate itself and the oversized report are the only steps without the
+  // skip-review guard. Clear size skip notice uses != 'true' and counts.
+  assert.equal(guards.length, steps.length - 2);
+  assert.match(action, /- name: Check pull request size\n {6}id: size\n/);
+  assert.match(
+    action,
+    /- name: Report an oversized pull request\n {6}if: steps\.size\.outputs\.oversized == 'true'\n/,
+  );
+  assert.match(
+    action,
+    /- name: Clear size skip notice\n {6}if: steps\.size\.outputs\.oversized != 'true'\n/,
+  );
+  // When under the limit, delete any prior size-skip notice (not edit-only).
+  assert.match(action, /<!-- agentic-pr-review-size -->/);
+  assert.match(
+    action,
+    /gh api -X DELETE "repos\/\$\{REPOSITORY\}\/issues\/comments\/\$\{comment_id\}"/,
+  );
+});
+
+test('size check classifies pull requests against the limit', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agentic-review-size-'));
+  const outputFor = async (...args) => {
+    const outputPath = join(root, `output-${args.join('-')}`);
+    await writeFile(outputPath, '');
+    await execFileAsync(checkPrSize, args, {
+      env: { ...process.env, GITHUB_OUTPUT: outputPath },
+    });
+    return readFile(outputPath, 'utf8');
+  };
+
+  try {
+    assert.match(await outputFor('4000', '1000', '10000'), /oversized=false/);
+    // The limit is a ceiling, not a threshold: exactly at it still reviews.
+    assert.match(await outputFor('9000', '1000', '10000'), /oversized=false/);
+    assert.match(await outputFor('9000', '1001', '10000'), /oversized=true/);
+    assert.match(await outputFor('9000', '1001', '10000'), /changed-lines=10001/);
+    // Zero disables the limit entirely.
+    assert.match(await outputFor('900000', '1', '0'), /oversized=false/);
+
+    await assert.rejects(
+      execFileAsync(checkPrSize, ['1', '1', 'many']),
+      (error) => {
+        assert.match(
+          `${error.stdout ?? ''}${error.stderr ?? ''}`,
+          /max-changed-lines must be a non-negative integer/,
+        );
+        return true;
+      },
+    );
+    await assert.rejects(
+      execFileAsync(checkPrSize, ['-1', '1', '10']),
+      (error) => {
+        assert.match(
+          `${error.stdout ?? ''}${error.stderr ?? ''}`,
+          /line counts must be non-negative integers/,
+        );
+        return true;
+      },
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }

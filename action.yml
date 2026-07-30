@@ -53,6 +53,12 @@ inputs:
     description: Existing memory issue number; when empty, discover or create the repository memory issue
     required: false
     default: ''
+  max-changed-lines:
+    description: >
+      Skip the review when additions plus deletions exceed this count, and
+      comment on the pull request instead. Set to 0 to review any size.
+    required: false
+    default: '10000'
   extensions-version:
     description: Pinned OpenHands extensions commit
     required: false
@@ -80,7 +86,101 @@ inputs:
 runs:
   using: composite
   steps:
+    # Runs before the checkouts so an oversized pull request costs one API
+    # call rather than a full clone and a model run. Every later step is
+    # gated on the result; see the contract test that enforces that.
+    - name: Check pull request size
+      id: size
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        MAX_CHANGED_LINES: ${{ inputs.max-changed-lines }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        REPOSITORY: ${{ github.repository }}
+      run: |
+        if [[ -z "$PR_NUMBER" ]]; then
+          echo "::notice::No pull request number; leaving the size gate open so configuration validation reports it"
+          exit 0
+        fi
+        if ! pr_size="$(
+          gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
+            --jq '"\(.additions) \(.deletions)"'
+        )"; then
+          echo "::error::Could not read pull request size from the GitHub API"
+          exit 1
+        fi
+        read -r additions deletions <<<"$pr_size"
+        "$GITHUB_ACTION_PATH/scripts/check-pr-size.sh" \
+          "$additions" "$deletions" "$MAX_CHANGED_LINES"
+
+    - name: Report an oversized pull request
+      if: steps.size.outputs.oversized == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        CHANGED_LINES: ${{ steps.size.outputs.changed-lines }}
+        MAX_CHANGED_LINES: ${{ inputs.max-changed-lines }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        REPOSITORY: ${{ github.repository }}
+      run: |
+        marker='<!-- agentic-pr-review-size -->'
+        body="$(
+          printf '%s\n\n' "$marker"
+          printf 'Skipped automatic review: this pull request changes %s lines, above the %s line limit.\n\n' \
+            "$CHANGED_LINES" "$MAX_CHANGED_LINES"
+          printf 'Reviews of this size are unreliable and expensive. Split the pull request, or raise `max-changed-lines` in the review workflow to review it anyway.\n'
+        )"
+        comment_id="$(
+          gh api --paginate --slurp \
+            "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" |
+            jq --arg marker "$marker" '
+              (if length > 0 and (.[0] | type) == "array" then add else . end)
+              | map(select((.body // "") | startswith($marker)))
+              | map(.id)
+              | max // empty
+            '
+        )"
+        # Edit the existing notice instead of posting one per push while the
+        # PR stays oversized. When it drops under the limit, the clear step
+        # deletes the notice so a real review is not paired with a skip post.
+        if [[ -n "$comment_id" ]]; then
+          gh api -X PATCH "repos/${REPOSITORY}/issues/comments/${comment_id}" \
+            -f body="$body" --jq '.id'
+        else
+          gh api -X POST "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            -f body="$body" --jq '.id'
+        fi
+
+    - name: Clear size skip notice
+      if: steps.size.outputs.oversized != 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        REPOSITORY: ${{ github.repository }}
+      run: |
+        if [[ -z "$PR_NUMBER" ]]; then
+          exit 0
+        fi
+        marker='<!-- agentic-pr-review-size -->'
+        comment_ids="$(
+          gh api --paginate --slurp \
+            "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" |
+            jq --arg marker "$marker" -r '
+              (if length > 0 and (.[0] | type) == "array" then add else . end)
+              | map(select((.body // "") | startswith($marker)))
+              | map(.id)
+              | .[]
+            '
+        )"
+        # No-op when none match. Delete every match so a prior multi-post
+        # race cannot leave a stale skip notice next to a real review.
+        for comment_id in $comment_ids; do
+          gh api -X DELETE "repos/${REPOSITORY}/issues/comments/${comment_id}"
+        done
+
     - name: Checkout pinned OpenHands extensions
+      if: steps.size.outputs.oversized != 'true'
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         repository: OpenHands/extensions
@@ -89,6 +189,7 @@ runs:
         persist-credentials: false
 
     - name: Checkout pull request repository
+      if: steps.size.outputs.oversized != 'true'
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         repository: ${{ github.event.pull_request.head.repo.full_name }}
@@ -99,6 +200,7 @@ runs:
         submodules: recursive
 
     - name: Install follow-up review guidance
+      if: steps.size.outputs.oversized != 'true'
       shell: bash
       env:
         REVIEW_GUIDANCE_PATH: ${{ inputs.review-guidance-path }}
@@ -110,7 +212,7 @@ runs:
 
     - name: Prepare persistent review memory
       id: memory
-      if: inputs.memory-enabled == 'true'
+      if: steps.size.outputs.oversized != 'true' && inputs.memory-enabled == 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
@@ -126,16 +228,19 @@ runs:
         fi
 
     - name: Set up Python
+      if: steps.size.outputs.oversized != 'true'
       uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
       with:
         python-version: '3.12'
 
     - name: Install uv
+      if: steps.size.outputs.oversized != 'true'
       uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
       with:
         enable-cache: ${{ inputs.enable-uv-cache }}
 
     - name: Validate configuration
+      if: steps.size.outputs.oversized != 'true'
       shell: bash
       env:
         LLM_API_KEY: ${{ inputs.llm-api-key }}
@@ -175,6 +280,7 @@ runs:
         fi
 
     - name: Verify review permission
+      if: steps.size.outputs.oversized != 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
@@ -209,6 +315,7 @@ runs:
         fi
 
     - name: Run agentic review
+      if: steps.size.outputs.oversized != 'true'
       shell: bash
       env:
         UV_PYTHON: '3.12'
@@ -266,7 +373,7 @@ runs:
           /tmp/review.json
 
     - name: Evaluate repository memory
-      if: inputs.memory-enabled == 'true' && steps.memory.outputs.issue-number != ''
+      if: steps.size.outputs.oversized != 'true' && inputs.memory-enabled == 'true' && steps.memory.outputs.issue-number != ''
       shell: bash
       env:
         UV_PYTHON: '3.12'
@@ -287,7 +394,7 @@ runs:
             "$MEMORY_DECISION_PATH"
 
     - name: Publish repository memory
-      if: inputs.memory-enabled == 'true' && steps.memory.outputs.issue-number != ''
+      if: steps.size.outputs.oversized != 'true' && inputs.memory-enabled == 'true' && steps.memory.outputs.issue-number != ''
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}

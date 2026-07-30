@@ -15,19 +15,21 @@ adds inline comments only for new or materially changed findings.
 
 The action is a composite action. Each run, in order:
 
-1. Checks out `OpenHands/extensions` at the pinned `extensions-version` commit.
-2. Checks out the PR head repository at full depth, with submodules and without
+1. Measures the PR against `max-changed-lines`. Above the limit it comments and
+   stops; every later step is skipped.
+2. Checks out `OpenHands/extensions` at the pinned `extensions-version` commit.
+3. Checks out the PR head repository at full depth, with submodules and without
    persisting credentials.
-3. Installs the versioned follow-up protocol — and, optionally, the consumer's
+4. Installs the versioned follow-up protocol — and, optionally, the consumer's
    own guidance file — into `.agents/skills/` of that checkout
    ([`scripts/install-guidance.sh`](scripts/install-guidance.sh)).
-4. Sets up Python 3.12 and [uv](https://github.com/astral-sh/uv).
-5. Validates that `llm-api-key`, `github-token`, `llm-model`, and a
+5. Sets up Python 3.12 and [uv](https://github.com/astral-sh/uv).
+6. Validates that `llm-api-key`, `github-token`, `llm-model`, and a
    `pull_request` event context are all present.
-6. Verifies the token can actually submit reviews by creating and immediately
+7. Verifies the token can actually submit reviews by creating and immediately
    deleting a pending review — so a permissions problem fails fast rather than
    after a full model run.
-7. Runs the pinned OpenHands PR-review agent script.
+8. Runs the pinned OpenHands PR-review agent script.
 
 Agent progress and the cost summary go to the job log; the action uploads no
 artifacts.
@@ -82,6 +84,7 @@ provider.
 | `review-guidance-path` | empty | Plain Markdown review rules from the consumer repository |
 | `memory-enabled` | `true` | Load and update persistent repository memory |
 | `memory-issue-number` | empty | Existing memory issue; otherwise discover or create it |
+| `max-changed-lines` | `10000` | Skip and comment above this many changed lines; `0` disables |
 
 ### Pinning and infrastructure
 
@@ -99,6 +102,27 @@ the pinned values so an unreviewed bump fails CI.
 
 The action declares no outputs. Consume the result through the review GitHub
 posts on the PR.
+
+### Oversized pull requests
+
+Above `max-changed-lines` (additions plus deletions, default `10000`), the
+action posts a comment and skips the review entirely. The check is one API call
+and runs before the checkouts, so an oversized PR costs no clone and no model
+call.
+
+The comment is edited in place on later pushes rather than reposted, so a
+long-running large PR accumulates one notice, not one per commit. When the PR
+later drops under the limit, that notice is deleted before the review runs.
+
+Reviews at that size are the ones least worth paying for: the diff exceeds what
+the reviewer can hold in useful context, so findings get shallow while cost
+grows. Split the PR, or raise the limit for a repository where large mechanical
+diffs are normal:
+
+```yaml
+with:
+  max-changed-lines: '25000'   # or '0' to review any size
+```
 
 ### Sub-agent cost
 
@@ -163,6 +187,7 @@ your own files under these names:
 
 - `.agents/skills/agentic-review-follow-up.md`
 - `.agents/skills/repository-review-best-practices.md`
+- `.agents/skills/agentic-review-repository-memory.md`
 
 ### Public and specific skills
 
