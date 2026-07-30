@@ -27,6 +27,9 @@ const installGuidance = fileURLToPath(
 const followupSkillPath = fileURLToPath(
   new URL('../skills/follow-up-review.md', import.meta.url),
 );
+const checkPrSize = fileURLToPath(
+  new URL('../scripts/check-pr-size.sh', import.meta.url),
+);
 const memorySkillPath = fileURLToPath(
   new URL('../skills/repository-memory.md', import.meta.url),
 );
@@ -892,6 +895,69 @@ fi
     assert.match(published, /agentic-pr-review-memory-entry/);
     assert.match(published, /agentic-pr-review-source-comment:123/);
     assert.match(published, /Trust automation identities explicitly/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+
+test('every step after the size gate is gated on it', () => {
+  // A step added without the guard would run on an oversized pull request,
+  // which is exactly the cost this gate exists to avoid.
+  const steps = action.match(/^ {4}- name:/gm) ?? [];
+  // Compound conditions (e.g. memory steps) still count when they include the
+  // size gate; only the exact skip-guard form is required for pure steps.
+  const guards =
+    action.match(/^ {6}if:.*steps\.size\.outputs\.oversized != 'true'/gm) ?? [];
+  // The gate itself and the comment it posts are the only ungated steps.
+  assert.equal(guards.length, steps.length - 2);
+  assert.match(action, /- name: Check pull request size\n {6}id: size\n/);
+  assert.match(
+    action,
+    /- name: Report an oversized pull request\n {6}if: steps\.size\.outputs\.oversized == 'true'\n/,
+  );
+});
+
+test('size check classifies pull requests against the limit', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agentic-review-size-'));
+  const outputFor = async (...args) => {
+    const outputPath = join(root, `output-${args.join('-')}`);
+    await writeFile(outputPath, '');
+    await execFileAsync(checkPrSize, args, {
+      env: { ...process.env, GITHUB_OUTPUT: outputPath },
+    });
+    return readFile(outputPath, 'utf8');
+  };
+
+  try {
+    assert.match(await outputFor('4000', '1000', '10000'), /oversized=false/);
+    // The limit is a ceiling, not a threshold: exactly at it still reviews.
+    assert.match(await outputFor('9000', '1000', '10000'), /oversized=false/);
+    assert.match(await outputFor('9000', '1001', '10000'), /oversized=true/);
+    assert.match(await outputFor('9000', '1001', '10000'), /changed-lines=10001/);
+    // Zero disables the limit entirely.
+    assert.match(await outputFor('900000', '1', '0'), /oversized=false/);
+
+    await assert.rejects(
+      execFileAsync(checkPrSize, ['1', '1', 'many']),
+      (error) => {
+        assert.match(
+          `${error.stdout ?? ''}${error.stderr ?? ''}`,
+          /max-changed-lines must be a non-negative integer/,
+        );
+        return true;
+      },
+    );
+    await assert.rejects(
+      execFileAsync(checkPrSize, ['-1', '1', '10']),
+      (error) => {
+        assert.match(
+          `${error.stdout ?? ''}${error.stderr ?? ''}`,
+          /line counts must be non-negative integers/,
+        );
+        return true;
+      },
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }

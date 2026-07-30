@@ -14,6 +14,10 @@
 - Explain permission-preflight failures without overclaiming the cause: name
   the usual `pull-requests: write` fix, surface `gh`'s stderr, and name the
   leftover review ID when cleanup fails.
+- Skip the review and comment on the pull request when additions plus deletions
+  exceed `max-changed-lines` (default `10000`; `0` disables). The check runs
+  before the checkouts, and the notice is edited in place rather than reposted.
+
 - Stop passing `REVIEW_STYLE`, `ACP_COMMAND`, and `ACP_PROMPT_TIMEOUT`; the
   pinned agent ignores all three under `AGENT_KIND: openhands`.
 - Remove the log artifact upload, which only matched paths the pinned agent
