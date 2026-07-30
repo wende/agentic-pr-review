@@ -440,6 +440,58 @@ fi
   }
 });
 
+test('memory loader discovers and reuses the oldest matching issue', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agentic-memory-discover-'));
+  const repo = join(root, 'repo');
+  const bin = join(root, 'bin');
+  const fakeGh = join(bin, 'gh');
+  const githubOutput = join(root, 'github-output');
+  await mkdir(repo);
+  await mkdir(bin);
+  await writeFile(
+    fakeGh,
+    `#!/usr/bin/env bash
+set -euo pipefail
+args="$*"
+if [[ "$args" == *"/issues/5/comments"* ]]; then
+  printf '%s\\n' '[[]]'
+elif [[ "$args" == *"/issues/5"* ]]; then
+  printf '%s\\n' '{"number":5,"title":"[agentic-pr-review] Repository memory","body":"<!-- agentic-pr-review-memory -->","html_url":"https://github.com/example/repo/issues/5"}'
+elif [[ "$args" == *"issues?state=all"* ]]; then
+  printf '%s\\n' '[[{"number":12,"title":"[agentic-pr-review] Repository memory","pull_request":{}},{"number":8,"title":"Other issue"},{"number":7,"title":"[agentic-pr-review] Repository memory"},{"number":5,"title":"[agentic-pr-review] Repository memory"}]]'
+else
+  echo "unexpected gh invocation: $args" >&2
+  exit 2
+fi
+`,
+  );
+  await chmod(fakeGh, 0o755);
+
+  try {
+    await execFileAsync(
+      prepareMemory,
+      [repo, memorySkillPath, 'example/repo', ''],
+      {
+        env: {
+          ...process.env,
+          GH_TOKEN: 'test-token',
+          GITHUB_OUTPUT: githubOutput,
+          PATH: `${bin}:${process.env.PATH}`,
+        },
+      },
+    );
+    const installed = await readFile(
+      join(repo, '.agents', 'skills', 'agentic-review-repository-memory.md'),
+      'utf8',
+    );
+    const outputs = await readFile(githubOutput, 'utf8');
+    assert.match(installed, /Issue: \[#5\]/);
+    assert.match(outputs, /issue-number=5/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('memory evaluator explicitly records a first-review no-candidate decision', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agentic-memory-evaluate-'));
   const bin = join(root, 'bin');
