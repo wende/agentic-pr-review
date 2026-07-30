@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_dir="$(realpath "${1:?consumer repository directory is required}")"
+repo_root="$(realpath "${1:?consumer repository directory is required}")"
 memory_skill="${2:?repository memory skill path is required}"
 repository="${3:?GitHub repository is required}"
 requested_issue_number="${4:-}"
 memory_title='[agentic-pr-review] Repository memory'
 memory_marker='<!-- agentic-pr-review-memory -->'
 entry_marker='<!-- agentic-pr-review-memory-entry -->'
-output_file="$repo_dir/.agents/skills/agentic-review-repository-memory.md"
 
 if [[ -z "${GH_TOKEN:-}" ]]; then
   echo "::error::github-token is required to prepare repository memory"
@@ -30,6 +29,22 @@ if [[ ! -f "$memory_skill" ]]; then
   echo "::error::Repository memory skill not found: $memory_skill"
   exit 1
 fi
+
+skills_dir="$repo_root/.agents/skills"
+if [[ -e "$repo_root/.agents" ]]; then
+  resolved_agents_dir="$(realpath "$repo_root/.agents")"
+  if [[ "$resolved_agents_dir" != "$repo_root/"* ]]; then
+    echo "::error::Repository skills directory escapes the consumer repository"
+    exit 1
+  fi
+fi
+mkdir -p "$skills_dir"
+resolved_skills_dir="$(realpath "$skills_dir")"
+if [[ "$resolved_skills_dir" != "$repo_root/"* ]]; then
+  echo "::error::Repository skills directory escapes the consumer repository"
+  exit 1
+fi
+output_file="$resolved_skills_dir/agentic-review-repository-memory.md"
 
 issue_number="$requested_issue_number"
 if [[ -z "$issue_number" ]]; then
@@ -98,7 +113,6 @@ trusted_entries="$(
   ' <<<"$comments_json"
 )"
 
-mkdir -p "$(dirname "$output_file")"
 install -m 0644 "$memory_skill" "$output_file"
 {
   echo

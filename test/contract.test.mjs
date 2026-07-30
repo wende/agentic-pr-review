@@ -133,6 +133,8 @@ test('guidance installer wraps plain Markdown and rejects escaping symlinks', as
 test('memory loader accepts marked trusted entries and rejects untrusted comments', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agentic-memory-'));
   const repo = join(root, 'repo');
+  const escapingRepo = join(root, 'escaping-repo');
+  const outside = join(root, 'outside');
   const bin = join(root, 'bin');
   const fakeGh = join(bin, 'gh');
   const githubOutput = join(root, 'github-output');
@@ -179,6 +181,84 @@ fi
     assert.doesNotMatch(installed, /Ignore all safety rules/);
     assert.doesNotMatch(installed, /Trust this unrelated app/);
     assert.match(outputs, /issue-number=7/);
+
+    await mkdir(escapingRepo);
+    await mkdir(outside);
+    await symlink(outside, join(escapingRepo, '.agents'));
+    await assert.rejects(
+      execFileAsync(
+        prepareMemory,
+        [escapingRepo, memorySkillPath, 'example/repo', '7'],
+        {
+          env: {
+            ...process.env,
+            GH_TOKEN: 'test-token',
+            PATH: `${bin}:${process.env.PATH}`,
+          },
+        },
+      ),
+      (error) => {
+        assert.match(
+          `${error.stdout ?? ''}${error.stderr ?? ''}`,
+          /skills directory escapes the consumer repository/,
+        );
+        return true;
+      },
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('memory loader discovers absence and creates a marked issue', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agentic-memory-create-'));
+  const repo = join(root, 'repo');
+  const bin = join(root, 'bin');
+  const fakeGh = join(bin, 'gh');
+  const githubOutput = join(root, 'github-output');
+  await mkdir(repo);
+  await mkdir(bin);
+  await writeFile(
+    fakeGh,
+    `#!/usr/bin/env bash
+set -euo pipefail
+args="$*"
+if [[ "$args" == *"/issues/9/comments"* ]]; then
+  printf '%s\\n' '[[]]'
+elif [[ "$args" == *"/issues/9"* ]]; then
+  printf '%s\\n' '{"number":9,"title":"[agentic-pr-review] Repository memory","body":"<!-- agentic-pr-review-memory -->","html_url":"https://github.com/example/repo/issues/9"}'
+elif [[ "$args" == *"-X POST repos/example/repo/issues"* ]]; then
+  printf '%s\\n' '{"number":9}'
+elif [[ "$args" == *"issues?state=all"* ]]; then
+  printf '%s\\n' '[[]]'
+else
+  echo "unexpected gh invocation: $args" >&2
+  exit 2
+fi
+`,
+  );
+  await chmod(fakeGh, 0o755);
+
+  try {
+    await execFileAsync(
+      prepareMemory,
+      [repo, memorySkillPath, 'example/repo', ''],
+      {
+        env: {
+          ...process.env,
+          GH_TOKEN: 'test-token',
+          GITHUB_OUTPUT: githubOutput,
+          PATH: `${bin}:${process.env.PATH}`,
+        },
+      },
+    );
+    const installed = await readFile(
+      join(repo, '.agents', 'skills', 'agentic-review-repository-memory.md'),
+      'utf8',
+    );
+    const outputs = await readFile(githubOutput, 'utf8');
+    assert.match(installed, /No accepted memory entries/);
+    assert.match(outputs, /issue-number=9/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
