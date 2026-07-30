@@ -111,12 +111,13 @@ Important inputs:
 ## Persistent repository memory
 
 By default, the action discovers or creates an issue named
-`[agentic-pr-review] Repository memory`. Before each review it loads the issue
-body and up to 100 accepted, marked comments as a `/codereview` skill. The
-reviewer never writes memory on the first review. On a later review, it may
-append one new comment only when it verifies that feedback from its previous
-review was applied in the new code and the resulting lesson generalizes beyond
-that one fix into a durable code-quality or design principle.
+`[agentic-pr-review] Repository memory`. The issue body is only a storage marker;
+the versioned Action skill is the single source of truth for memory behavior.
+Before each review, the action loads up to 100 accepted, marked comments as a
+`/codereview` skill. The reviewer never writes memory on the first review. On a
+later review, it may append one new comment only when it verifies that feedback
+from its previous review was applied in the new code and the resulting lesson
+generalizes beyond that one fix into a durable code-quality or design principle.
 
 Memory comments are append-only to avoid lost updates when different pull
 requests are reviewed concurrently. The loader ignores unmarked comments and

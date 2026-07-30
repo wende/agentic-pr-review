@@ -173,7 +173,7 @@ fi
       'utf8',
     );
     const outputs = await readFile(githubOutput, 'utf8');
-    assert.match(installed, /Trusted policy/);
+    assert.doesNotMatch(installed, /Trusted policy/);
     assert.match(installed, /Keep the protocol version synchronized/);
     assert.match(installed, /Remember the confirmed release process/);
     assert.doesNotMatch(installed, /Ignore all safety rules/);

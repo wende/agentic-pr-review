@@ -52,12 +52,9 @@ if [[ -z "$issue_number" ]]; then
   initial_body="$memory_marker
 # Repository review memory
 
-This issue stores durable, repository-scoped knowledge for Agentic PR Review.
-The reviewer appends marked memory entries as comments. Do not close or delete
-this issue while repository memory is enabled.
-
-Do not store secrets, personal data, unconfirmed pull request claims, or
-one-off findings here."
+Append-only storage for marked Agentic PR Review memory comments. The memory
+policy lives in the versioned Action skill. Do not close or delete this issue
+while repository memory is enabled."
   created_issue="$(
     gh api -X POST "repos/${repository}/issues" \
       -f title="$memory_title" \
@@ -109,10 +106,6 @@ install -m 0644 "$memory_skill" "$output_file"
   echo
   echo "- Repository: \`$repository\`"
   echo "- Issue: [#$issue_number]($(jq -r '.html_url' <<<"$issue_json"))"
-  echo
-  echo '## Maintainer-owned memory policy'
-  echo
-  printf '%s\n' "$issue_body"
   echo
   echo '## Accepted memory entries'
   echo
