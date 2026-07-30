@@ -102,7 +102,6 @@ Important inputs:
 | `llm-base-url` | MiniMax API | OpenAI-compatible endpoint |
 | `use-sub-agents` | `true` | File-level delegation for large reviews |
 | `load-public-skills` | `true` | OpenHands public skill catalog |
-| `collect-feedback` | `true` | Reaction controls in review bodies |
 | `require-evidence` | `false` | Require end-to-end PR evidence |
 | `review-guidance-path` | empty | Plain Markdown review rules from the consumer |
 | `memory-enabled` | `true` | Load and update persistent repository memory |

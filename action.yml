@@ -29,10 +29,6 @@ inputs:
     description: Load the OpenHands public skill catalog
     required: false
     default: 'true'
-  collect-feedback:
-    description: Add reaction-based feedback controls to the review body
-    required: false
-    default: 'true'
   require-evidence:
     description: Require end-to-end evidence in the PR description
     required: false
@@ -194,8 +190,6 @@ runs:
         LLM_BASE_URL: ${{ inputs.llm-base-url }}
         REVIEW_STYLE: roasted
         REQUIRE_EVIDENCE: ${{ inputs.require-evidence }}
-        COLLECT_FEEDBACK: ${{ inputs.collect-feedback }}
-        REVIEW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         USE_SUB_AGENTS: ${{ inputs.use-sub-agents }}
         LOAD_PUBLIC_SKILLS: ${{ inputs.load-public-skills }}
         LLM_API_KEY: ${{ inputs.llm-api-key }}

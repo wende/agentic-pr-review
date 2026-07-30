@@ -64,6 +64,13 @@ test('plain repository guidance is wrapped as a codereview skill', () => {
   assert.match(action, /scripts\/install-guidance\.sh/);
 });
 
+test('reviews do not include the unused reaction feedback footer', () => {
+  assert.doesNotMatch(
+    action,
+    /collect-feedback|COLLECT_FEEDBACK|REVIEW_RUN_URL/,
+  );
+});
+
 test('persistent memory is prepared and passed to the reviewer', () => {
   assert.match(action, /memory-enabled:/);
   assert.match(action, /memory-issue-number:/);
