@@ -163,8 +163,9 @@ A workflow filtered out this way reports no status at all, so do not combine
 ### By label
 
 Add the `skip-review` label to opt a single pull request out — a revert, a
-mechanical rename, a release commit. The example workflow checks the label at
-job level, so a labelled pull request never starts a runner.
+mechanical rename, a release commit. Both the published example and this
+repository's self-review workflow check the label at job level, so a labelled
+pull request never starts a runner.
 
 Rename the label with `skip-label`, or set it to an empty value to disable the
 check:
@@ -178,9 +179,9 @@ check:
 ```
 
 The action enforces `skip-label` itself, so a custom name works with any
-workflow. Consumers using the example workflow should also update the
-hard-coded label in its job-level `if:` expression, which keeps the cheap
-never-start-a-runner path.
+workflow. Consumers using the example (or a workflow that copies its job-level
+`if:`) should also update the hard-coded label in that expression, which keeps
+the cheap never-start-a-runner path.
 
 The label is read from the event payload, so labelling an in-flight review does
 not cancel it. The next push cancels it anyway through the existing
