@@ -445,11 +445,16 @@ runs:
         MEMORY_DECISION_PATH: ${{ runner.temp }}/agentic-review-memory-${{ github.run_id }}-${{ github.run_attempt }}.json
       run: |
         cd agentic-review-repo
-        uv run --no-project \
+        # Composite steps cannot use continue-on-error, so absorb the failure
+        # here. Memory is layered on top of a review that is already published;
+        # losing it must never turn a delivered review into a red job.
+        if ! uv run --no-project \
           --with "$OPENHANDS_SDK_PACKAGE" \
           python "$GITHUB_ACTION_PATH/scripts/evaluate-memory.py" \
             "$GITHUB_ACTION_PATH/skills/memory-evaluator.md" \
-            "$MEMORY_DECISION_PATH"
+            "$MEMORY_DECISION_PATH"; then
+          echo "::warning::Repository memory evaluation failed; the published review is unaffected"
+        fi
 
     - name: Publish repository memory
       if: steps.skip.outputs.skip != 'true' && steps.size.outputs.oversized != 'true' && inputs.memory-enabled == 'true' && steps.memory.outputs.issue-number != ''
@@ -462,9 +467,14 @@ runs:
         MEMORY_DECISION_PATH: ${{ runner.temp }}/agentic-review-memory-${{ github.run_id }}-${{ github.run_attempt }}.json
       run: |
         cd agentic-review-repo
-        "$GITHUB_ACTION_PATH/scripts/publish-memory.sh" \
+        # Same reasoning as the evaluation step: the script's own ::error::
+        # annotations stay visible, but a memory write that fails must not
+        # discard the review this job already delivered.
+        if ! "$GITHUB_ACTION_PATH/scripts/publish-memory.sh" \
           "$MEMORY_DECISION_PATH" \
           "$REPO_NAME" \
           "$PR_NUMBER" \
           "$MEMORY_ISSUE_NUMBER" \
-          "$(git rev-parse HEAD)"
+          "$(git rev-parse HEAD)"; then
+          echo "::warning::Repository memory was not updated; the published review is unaffected"
+        fi

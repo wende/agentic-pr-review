@@ -1086,6 +1086,141 @@ fi
   }
 });
 
+test('a failed memory evaluation degrades instead of discarding a published review', async () => {
+  // The review is already posted when this script runs, so a malformed model
+  // response must not fail the job. Regression test for a run where the review
+  // published and the job then went red on `1-5 evidence items`.
+  const root = await mkdtemp(join(tmpdir(), 'agentic-memory-degrade-'));
+  const bin = join(root, 'bin');
+  const fakeGh = join(bin, 'gh');
+  const fakeGit = join(bin, 'git');
+  const fakeLitellm = join(root, 'litellm.py');
+  const decisionPath = join(root, 'decision.json');
+  const previousHead = 'b'.repeat(40);
+  const currentHead = 'c'.repeat(40);
+  await mkdir(bin);
+  await writeFile(
+    fakeGh,
+    `#!/usr/bin/env bash
+set -euo pipefail
+args="$*"
+if [[ "$args" == *"/pulls/5/reviews"* ]]; then
+  printf '%s\\n' '[[{"id":22,"commit_id":"${previousHead}","submitted_at":"2026-07-30T10:00:00Z","body":"<!-- agentic-pr-review -->\\nReview.","user":{"login":"github-actions[bot]"}},{"id":23,"commit_id":"${currentHead}","submitted_at":"2026-07-30T11:00:00Z","body":"<!-- agentic-pr-review -->\\nFollow-up.","user":{"login":"github-actions[bot]"}}]]'
+elif [[ "$args" == *"/pulls/5/comments"* ]]; then
+  printf '%s\\n' '[[{"id":123,"pull_request_review_id":22,"path":"src/trust.py","line":7,"body":"Trust only an explicit automation identity.","html_url":"https://github.com/example/repo/pull/5#discussion_r123","user":{"login":"github-actions[bot]"}}]]'
+else
+  echo "unexpected gh invocation: $args" >&2
+  exit 2
+fi
+`,
+  );
+  await writeFile(
+    fakeGit,
+    `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == "rev-parse HEAD" ]]; then
+  printf '%s\\n' '${currentHead}'
+elif [[ "$1 $2" == "diff --name-only" ]]; then
+  printf '%s\\n' 'src/trust.py'
+elif [[ "$1 $2" == "diff --no-ext-diff" ]]; then
+  printf '%s\\n' 'diff --git a/src/trust.py b/src/trust.py' '-allow_every_bot = True' '+trusted_login = "github-actions[bot]"'
+else
+  echo "unexpected git invocation: $*" >&2
+  exit 2
+fi
+`,
+  );
+  // Exactly the shape that broke the real run: a candidate with zero evidence.
+  await writeFile(
+    fakeLitellm,
+    `import json
+from types import SimpleNamespace
+
+def completion(**kwargs):
+    result = {
+        "decision_version": 1,
+        "decision": "candidate",
+        "source_comment_id": 123,
+        "lesson": "Trust automation identities explicitly.",
+        "original_concern": "A broad bot-type rule trusted unrelated apps.",
+        "applied_fix": "The rule now checks the exact built-in bot login.",
+        "evidence": [],
+    }
+    function = SimpleNamespace(
+        name="record_memory_decision",
+        arguments=json.dumps(result),
+    )
+    tool_call = SimpleNamespace(function=function)
+    message = SimpleNamespace(content=None, tool_calls=[tool_call])
+    return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+`,
+  );
+  await chmod(fakeGh, 0o755);
+  await chmod(fakeGit, 0o755);
+
+  try {
+    // Must not throw: execFileAsync rejects on a non-zero exit status.
+    const result = await execFileAsync(
+      'python3',
+      [evaluateMemory, fileURLToPath(
+        new URL('../skills/memory-evaluator.md', import.meta.url),
+      ), decisionPath],
+      {
+        env: {
+          ...process.env,
+          GH_TOKEN: 'test-token',
+          LLM_API_KEY: 'model-key',
+          LLM_BASE_URL: 'https://model.example/v1',
+          LLM_MODEL: 'openai/test-model',
+          PATH: `${bin}:${process.env.PATH}`,
+          PR_NUMBER: '5',
+          PYTHONPATH: root,
+          REPO_NAME: 'example/repo',
+        },
+      },
+    );
+    // The failure must stay visible rather than being swallowed silently.
+    assert.match(result.stdout, /::warning::Memory evaluation failed/);
+    assert.match(result.stdout, /1-5 evidence items/);
+    const decision = JSON.parse(await readFile(decisionPath, 'utf8'));
+    assert.equal(decision.decision, 'no_candidate');
+    assert.equal(decision.reason, 'evaluation_failed');
+    assert.ok(decision.details.length > 0 && decision.details.length <= 1000);
+    // The publisher's whitelist must accept the reason the evaluator emits,
+    // or degrading here just moves the hard failure one step later. A
+    // no-candidate decision exits before any `gh` call, so run it for real.
+    const published = await execFileAsync(
+      'bash',
+      [publishMemory, decisionPath, 'example/repo', '5', '1', currentHead],
+      { env: { ...process.env, GH_TOKEN: 'test-token' } },
+    );
+    assert.match(published.stdout, /Repository memory unchanged: evaluation_failed/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('neither memory step can fail a job that already published a review', () => {
+  // Composite actions do not support continue-on-error on a step, so both
+  // memory steps must absorb failure in their own shell.
+  assert.match(
+    action,
+    /if ! uv run --no-project \\\n\s+--with "\$OPENHANDS_SDK_PACKAGE"/,
+  );
+  assert.match(
+    action,
+    /::warning::Repository memory evaluation failed; the published review is unaffected/,
+  );
+  assert.match(
+    action,
+    /if ! "\$GITHUB_ACTION_PATH\/scripts\/publish-memory\.sh"/,
+  );
+  assert.match(
+    action,
+    /::warning::Repository memory was not updated; the published review is unaffected/,
+  );
+});
+
 test('memory publisher validates and appends a candidate idempotency marker', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agentic-memory-publish-'));
   const bin = join(root, 'bin');

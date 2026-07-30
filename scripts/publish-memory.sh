@@ -39,7 +39,8 @@ if [[ "$decision" == "no_candidate" ]]; then
       .reason == "no_previous_inline_comments" or
       .reason == "previous_commit_unavailable" or
       .reason == "no_applied_feedback" or
-      .reason == "no_generalizable_lesson"
+      .reason == "no_generalizable_lesson" or
+      .reason == "evaluation_failed"
     ) and
     (.details | type == "string" and length > 0 and length <= 1000)
   ' "$decision_path" >/dev/null; then

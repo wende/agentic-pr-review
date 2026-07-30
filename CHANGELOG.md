@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Never fail a job for a memory failure after the review is published. The
+  evaluator degrades to a `no_candidate` decision with reason
+  `evaluation_failed` and a `::warning::` instead of raising, and both memory
+  steps absorb a non-zero exit in their own shell because composite steps
+  cannot use `continue-on-error`. Previously a model response that missed the
+  schema — for example a candidate carrying no evidence items — turned a run
+  that had already posted its review into a red job.
+
 - Bound investigation by wall-clock time as well as iteration count
   (`review-wrap-up-seconds`, default `1200`). Per-turn latency grows with
   context size, so an iteration budget alone does not bound how long a review

@@ -121,6 +121,16 @@ def write_decision(path: Path, decision: dict[str, Any]) -> None:
     )
 
 
+def truncate_details(details: str) -> str:
+    # `details` is schema-bound to 1-1000 characters, and an arbitrary exception
+    # message can exceed that or be empty. Neutralize review markers too, so a
+    # failure echoing repository content cannot forge one.
+    cleaned = details.replace("<!--", "<!—").replace("-->", "—>").strip()
+    if not cleaned:
+        return "The memory evaluator failed without a message."
+    return cleaned if len(cleaned) <= 1000 else cleaned[:997] + "..."
+
+
 def no_candidate(reason: str, details: str) -> dict[str, Any]:
     return {
         "decision_version": 1,
@@ -251,6 +261,28 @@ def main() -> None:
     if not repository or not pr_number.isdigit():
         raise SystemExit("REPO_NAME and numeric PR_NUMBER are required")
 
+    # The review is already published by the time this runs. Memory is an
+    # enhancement layered on top of it, so a malformed model response, a
+    # transient API failure, or an unexpected GitHub payload must degrade to
+    # "no memory recorded" rather than failing the job and burying a review
+    # that already succeeded.
+    try:
+        evaluate(prompt_path, decision_path, repository, pr_number)
+    except Exception as error:
+        details = f"{type(error).__name__}: {error}".strip()
+        write_decision(
+            decision_path,
+            no_candidate("evaluation_failed", truncate_details(details)),
+        )
+        print(f"::warning::Memory evaluation failed, review unaffected: {details}")
+
+
+def evaluate(
+    prompt_path: Path,
+    decision_path: Path,
+    repository: str,
+    pr_number: str,
+) -> None:
     head_commit = command("git", "rev-parse", "HEAD").strip()
     reviews = flatten_pages(
         gh_json(
