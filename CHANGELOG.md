@@ -11,6 +11,21 @@
   60-iteration ceiling.
 - Verify that the current run publishes a new marked review.
 - Remove the unused reaction-based review feedback footer.
+- Explain permission-preflight failures without overclaiming the cause: name
+  the usual `pull-requests: write` fix, surface `gh`'s stderr, and name the
+  leftover review ID when cleanup fails.
+- Stop passing `REVIEW_STYLE`, `ACP_COMMAND`, and `ACP_PROMPT_TIMEOUT`; the
+  pinned agent ignores all three under `AGENT_KIND: openhands`.
+- Remove the log artifact upload, which only matched paths the pinned agent
+  never writes.
+- Remove the `lmnr-api-key` input and stop setting `LMNR_PROJECT_API_KEY`. The
+  action now sends no telemetry. `lmnr-package` remains pinned because the
+  pinned agent script imports `lmnr` at module scope. Workflows still passing
+  `lmnr-api-key` will see an unexpected-input warning and no other change.
+- Document the `use-sub-agents` cost tradeoff, reserved skill filenames, and the
+  full input set.
+- Add `AGENTS.md` and `CLAUDE.md` with repository conventions and the upstream
+  divergence list.
 
 ## 1.0.0 - 2026-07-30
 
