@@ -30,6 +30,7 @@ const followupSkillPath = fileURLToPath(
 const memorySkillPath = fileURLToPath(
   new URL('../skills/repository-memory.md', import.meta.url),
 );
+const memorySkill = await readFile(memorySkillPath, 'utf8');
 const prepareMemory = fileURLToPath(
   new URL('../scripts/prepare-memory.sh', import.meta.url),
 );
@@ -69,6 +70,15 @@ test('persistent memory is prepared and passed to the reviewer', () => {
   assert.match(action, /scripts\/prepare-memory\.sh/);
   assert.match(action, /AGENT_MEMORY_ISSUE_NUMBER/);
   assert.match(action, /GH_TOKEN: \$\{\{ inputs\.github-token \}\}/);
+});
+
+test('memory is learned only from applied, generalizable review feedback', () => {
+  assert.match(memorySkill, /Never write memory during the first marked review/);
+  assert.match(memorySkill, /previous review comment/);
+  assert.match(memorySkill, /current HEAD demonstrably applied/);
+  assert.match(memorySkill, /how the implementation changed/);
+  assert.match(memorySkill, /Do not remember still-present or obsolete findings/);
+  assert.match(memorySkill, /Do not remember a one-off\s+fix/);
 });
 
 test('guidance installer wraps plain Markdown and rejects escaping symlinks', async () => {

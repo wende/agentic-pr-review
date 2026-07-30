@@ -114,14 +114,19 @@ Important inputs:
 By default, the action discovers or creates an issue named
 `[agentic-pr-review] Repository memory`. Before each review it loads the issue
 body and up to 100 accepted, marked comments as a `/codereview` skill. The
-reviewer may append one new comment when it learns a durable repository-level
-lesson supported by repository evidence.
+reviewer never writes memory on the first review. On a later review, it may
+append one new comment only when it verifies that feedback from its previous
+review was applied in the new code and the resulting lesson generalizes beyond
+that one fix into a durable code-quality or design principle.
 
 Memory comments are append-only to avoid lost updates when different pull
 requests are reviewed concurrently. The loader ignores unmarked comments and
 accepts marked entries only from repository owners, members, collaborators, or
 the built-in `github-actions[bot]`. Pull request text and changed files are
-never sufficient evidence for a memory update.
+never sufficient evidence for a memory update. Still-present findings,
+obsolete findings, resolved-thread metadata, and one-off fixes are not stored.
+Each accepted entry records the original review concern, how the implementation
+fixed it, the generalized lesson, and links or paths supporting that conclusion.
 
 The consumer workflow must grant `issues: write`; the example already does.
 For deterministic setup, create the memory issue once and pass its number:
