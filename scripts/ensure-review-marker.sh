@@ -5,6 +5,7 @@ repository="${1:?GitHub repository is required}"
 pr_number="${2:?pull request number is required}"
 head_commit="${3:?current head commit is required}"
 previous_review_id="${4:?previous review ID is required}"
+prepared_review_path="${5:-}"
 review_marker='<!-- agentic-pr-review -->'
 
 if [[ -z "${GH_TOKEN:-}" ]]; then
@@ -38,8 +39,35 @@ review="$(
     ' <<<"$reviews_json"
 )"
 if [[ -z "$review" ]]; then
-  echo "::error::Agent exited without posting a new review for $head_commit"
-  exit 1
+  if [[ -z "$prepared_review_path" || ! -f "$prepared_review_path" ]]; then
+    echo "::error::Agent exited without posting or preparing a new review for $head_commit"
+    exit 1
+  fi
+  if ! jq -e \
+    --arg head "$head_commit" '
+      type == "object" and
+      .commit_id == $head and
+      (.event == "COMMENT" or .event == "REQUEST_CHANGES") and
+      (.body | type == "string") and
+      ((.comments // []) | type == "array")
+    ' "$prepared_review_path" >/dev/null; then
+    echo "::error::Agent prepared an invalid review payload"
+    exit 1
+  fi
+  review="$(
+    jq \
+      --arg marker "$review_marker" '
+        if (.body | startswith($marker))
+        then .
+        else .body = $marker + "\n\n" + .body
+        end
+      ' "$prepared_review_path" |
+      gh api \
+        -X POST \
+        "repos/${repository}/pulls/${pr_number}/reviews" \
+        --input -
+  )"
+  echo "Published prepared review #$(jq -r '.id' <<<"$review")"
 fi
 
 review_id="$(jq -r '.id' <<<"$review")"

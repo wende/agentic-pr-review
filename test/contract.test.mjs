@@ -216,7 +216,7 @@ test('review protocol obeys the runtime wrap-up phase and requires publication',
   assert.match(skill, /review is not complete until that\s+marked review is posted/);
   assert.match(
     ensureReviewMarkerSource,
-    /Agent exited without posting a new review/,
+    /Agent exited without posting or preparing a new review/,
   );
   assert.match(ensureReviewMarkerSource, /Added the agentic review marker/);
   assert.match(action, /previous_review_id/);
@@ -289,6 +289,70 @@ fi
       /^<!-- agentic-pr-review -->\n\nReview without a model-supplied marker\.$/,
     );
     assert.match(result.stdout, /Added the agentic review marker to review #12/);
+    assert.match(result.stdout, /Verified marked review #12/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a prepared review is published when the agent reaches its hard limit', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agentic-review-fallback-'));
+  const bin = join(root, 'bin');
+  const fakeGh = join(bin, 'gh');
+  const preparedReview = join(root, 'review.json');
+  const postRecord = join(root, 'posted-review.json');
+  const head = 'e'.repeat(40);
+  await mkdir(bin);
+  await writeFile(
+    preparedReview,
+    JSON.stringify({
+      commit_id: head,
+      event: 'COMMENT',
+      body: 'Prepared findings.',
+      comments: [],
+    }),
+  );
+  await writeFile(
+    fakeGh,
+    `#!/usr/bin/env bash
+set -euo pipefail
+args="$*"
+if [[ "$args" == *"-X POST"*"/reviews"* ]]; then
+  tee "$POST_RECORD" >/dev/null
+  printf '%s\\n' '{"id":12,"commit_id":"${head}","body":"<!-- agentic-pr-review -->\\n\\nPrepared findings.","user":{"login":"github-actions[bot]"}}'
+elif [[ "$args" == *"/reviews/12"* ]]; then
+  printf '%s\\n' '{"id":12,"commit_id":"${head}","body":"<!-- agentic-pr-review -->\\n\\nPrepared findings.","user":{"login":"github-actions[bot]"}}'
+elif [[ "$args" == *"/reviews?per_page=100"* ]]; then
+  printf '%s\\n' '[[{"id":10,"commit_id":"${head}","body":"<!-- agentic-pr-review -->\\nOld review.","user":{"login":"github-actions[bot]"}}]]'
+else
+  echo "unexpected gh invocation: $args" >&2
+  exit 2
+fi
+`,
+  );
+  await chmod(fakeGh, 0o755);
+
+  try {
+    const result = await execFileAsync(
+      ensureReviewMarker,
+      ['example/repo', '5', head, '10', preparedReview],
+      {
+        env: {
+          ...process.env,
+          GH_TOKEN: 'test-token',
+          PATH: `${bin}:${process.env.PATH}`,
+          POST_RECORD: postRecord,
+        },
+      },
+    );
+    const posted = JSON.parse(await readFile(postRecord, 'utf8'));
+    assert.equal(posted.commit_id, head);
+    assert.equal(posted.event, 'COMMENT');
+    assert.match(
+      posted.body,
+      /^<!-- agentic-pr-review -->\n\nPrepared findings\.$/,
+    );
+    assert.match(result.stdout, /Published prepared review #12/);
     assert.match(result.stdout, /Verified marked review #12/);
   } finally {
     await rm(root, { recursive: true, force: true });
