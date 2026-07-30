@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.1.0 - 2026-07-30
+
 - Add persistent repository review memory backed by a GitHub issue.
 - Evaluate memory in a separate post-review model phase and publish only
   validated structured decisions.
@@ -21,7 +23,6 @@
 - Memory evaluation records `previous_commit_unavailable` instead of failing
   when a prior review commit is missing after a force-push.
 - Standardize follow-up vocabulary on `still present` (two words, no hyphen).
-
 - Stop passing `REVIEW_STYLE`, `ACP_COMMAND`, and `ACP_PROMPT_TIMEOUT`; the
   pinned agent ignores all three under `AGENT_KIND: openhands`.
 - Remove the log artifact upload, which only matched paths the pinned agent
@@ -38,9 +39,6 @@
   The example and this repository's self-review workflow also short-circuit at
   job level so a labelled PR never starts a runner.
 - Document `paths-ignore` and its required-status-check caveat in the example.
-- When a prior review commit is missing after a history rewrite, record a
-  `previous_commit_unavailable` no-candidate decision instead of failing
-  memory evaluation.
 
 ## 1.0.0 - 2026-07-30
 

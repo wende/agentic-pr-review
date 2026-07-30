@@ -31,7 +31,7 @@ jobs:
     continue-on-error: true
     steps:
       - name: Review pull request
-        uses: wende/agentic-pr-review@v1.0.0
+        uses: wende/agentic-pr-review@v1.1.0
         with:
           llm-api-key: ${{ secrets.MINIMAX_API_KEY }}
           github-token: ${{ github.token }}

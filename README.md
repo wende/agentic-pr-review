@@ -171,7 +171,7 @@ Rename the label with `skip-label`, or set it to an empty value to disable the
 check:
 
 ```yaml
-- uses: wende/agentic-pr-review@v1.0.0
+- uses: wende/agentic-pr-review@v1.1.0
   with:
     llm-api-key: ${{ secrets.MINIMAX_API_KEY }}
     github-token: ${{ github.token }}
@@ -221,7 +221,7 @@ If a repository already has a plain Markdown guide, it does not need skill
 frontmatter. Point the action at it:
 
 ```yaml
-- uses: wende/agentic-pr-review@v1.0.0
+- uses: wende/agentic-pr-review@v1.1.0
   with:
     llm-api-key: ${{ secrets.MINIMAX_API_KEY }}
     github-token: ${{ github.token }}
@@ -327,7 +327,7 @@ The consumer workflow must grant `issues: write`; the example already does.
 For deterministic setup, create the memory issue once and pass its number:
 
 ```yaml
-- uses: wende/agentic-pr-review@v1.0.0
+- uses: wende/agentic-pr-review@v1.1.0
   with:
     llm-api-key: ${{ secrets.MINIMAX_API_KEY }}
     github-token: ${{ github.token }}
@@ -338,7 +338,7 @@ Set `memory-enabled: 'false'` to run without persistent memory.
 
 ## Versioning
 
-Pin a complete release such as `wende/agentic-pr-review@v1.0.0` for
+Pin a complete release such as `wende/agentic-pr-review@v1.1.0` for
 reproducibility. Major compatibility tags such as `v1` may move to newer
 backward-compatible releases.
 
