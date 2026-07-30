@@ -140,8 +140,9 @@ runs:
               | max // empty
             '
         )"
-        # Edit the existing notice instead of posting one per push, so the
-        # comment always reflects the current size.
+        # Edit the existing notice instead of posting one per push while the
+        # PR stays oversized. When it drops under the limit, the clear step
+        # deletes the notice so a real review is not paired with a skip post.
         if [[ -n "$comment_id" ]]; then
           gh api -X PATCH "repos/${REPOSITORY}/issues/comments/${comment_id}" \
             -f body="$body" --jq '.id'
@@ -149,6 +150,34 @@ runs:
           gh api -X POST "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
             -f body="$body" --jq '.id'
         fi
+
+    - name: Clear size skip notice
+      if: steps.size.outputs.oversized != 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        REPOSITORY: ${{ github.repository }}
+      run: |
+        if [[ -z "$PR_NUMBER" ]]; then
+          exit 0
+        fi
+        marker='<!-- agentic-pr-review-size -->'
+        comment_ids="$(
+          gh api --paginate --slurp \
+            "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" |
+            jq --arg marker "$marker" -r '
+              (if length > 0 and (.[0] | type) == "array" then add else . end)
+              | map(select((.body // "") | startswith($marker)))
+              | map(.id)
+              | .[]
+            '
+        )"
+        # No-op when none match. Delete every match so a prior multi-post
+        # race cannot leave a stale skip notice next to a real review.
+        for comment_id in $comment_ids; do
+          gh api -X DELETE "repos/${REPOSITORY}/issues/comments/${comment_id}"
+        done
 
     - name: Checkout pinned OpenHands extensions
       if: steps.size.outputs.oversized != 'true'

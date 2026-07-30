@@ -917,12 +917,23 @@ test('every step after the size gate is gated on it', () => {
   // size gate; only the exact skip-guard form is required for pure steps.
   const guards =
     action.match(/^ {6}if:.*steps\.size\.outputs\.oversized != 'true'/gm) ?? [];
-  // The gate itself and the comment it posts are the only ungated steps.
+  // The gate itself and the oversized report are the only steps without the
+  // skip-review guard. Clear size skip notice uses != 'true' and counts.
   assert.equal(guards.length, steps.length - 2);
   assert.match(action, /- name: Check pull request size\n {6}id: size\n/);
   assert.match(
     action,
     /- name: Report an oversized pull request\n {6}if: steps\.size\.outputs\.oversized == 'true'\n/,
+  );
+  assert.match(
+    action,
+    /- name: Clear size skip notice\n {6}if: steps\.size\.outputs\.oversized != 'true'\n/,
+  );
+  // When under the limit, delete any prior size-skip notice (not edit-only).
+  assert.match(action, /<!-- agentic-pr-review-size -->/);
+  assert.match(
+    action,
+    /gh api -X DELETE "repos\/\$\{REPOSITORY\}\/issues\/comments\/\$\{comment_id\}"/,
   );
 });
 

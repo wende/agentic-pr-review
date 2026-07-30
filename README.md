@@ -111,7 +111,8 @@ and runs before the checkouts, so an oversized PR costs no clone and no model
 call.
 
 The comment is edited in place on later pushes rather than reposted, so a
-long-running large PR accumulates one notice, not one per commit.
+long-running large PR accumulates one notice, not one per commit. When the PR
+later drops under the limit, that notice is deleted before the review runs.
 
 Reviews at that size are the ones least worth paying for: the diff exceeds what
 the reviewer can hold in useful context, so findings get shallow while cost
@@ -186,6 +187,7 @@ your own files under these names:
 
 - `.agents/skills/agentic-review-follow-up.md`
 - `.agents/skills/repository-review-best-practices.md`
+- `.agents/skills/agentic-review-repository-memory.md`
 
 ### Public and specific skills
 

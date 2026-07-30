@@ -16,7 +16,8 @@
   leftover review ID when cleanup fails.
 - Skip the review and comment on the pull request when additions plus deletions
   exceed `max-changed-lines` (default `10000`; `0` disables). The check runs
-  before the checkouts, and the notice is edited in place rather than reposted.
+  before the checkouts. The notice is edited in place while oversized, and
+  deleted when the PR later drops under the limit.
 
 - Stop passing `REVIEW_STYLE`, `ACP_COMMAND`, and `ACP_PROMPT_TIMEOUT`; the
   pinned agent ignores all three under `AGENT_KIND: openhands`.
