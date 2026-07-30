@@ -223,6 +223,37 @@ test('review protocol obeys the runtime wrap-up phase and requires publication',
   assert.match(action, /scripts\/ensure-review-marker\.sh/);
 });
 
+test('action passes only environment variables the pinned agent reads', () => {
+  // The upstream agent script reads env vars by name and silently ignores the
+  // rest, so a stale variable looks like live configuration but does nothing.
+  // REVIEW_STYLE was deprecated upstream; ACP_* apply only to AGENT_KIND=acp.
+  assert.doesNotMatch(action, /REVIEW_STYLE/);
+  assert.doesNotMatch(action, /^\s+ACP_COMMAND:/m);
+  assert.doesNotMatch(action, /^\s+ACP_PROMPT_TIMEOUT:/m);
+  assert.match(action, /AGENT_KIND: openhands/);
+});
+
+test('no Laminar telemetry is configured', () => {
+  // The lmnr package stays pinned because the pinned agent script imports it at
+  // module scope, but no key is plumbed through, so nothing is ever exported.
+  assert.doesNotMatch(action, /LMNR_PROJECT_API_KEY/);
+  assert.doesNotMatch(action, /lmnr-api-key/);
+  assert.match(action, /default: lmnr==0\.7\.57/);
+});
+
+test('permission preflight explains a missing pull-requests scope', () => {
+  assert.match(action, /lacks pull-requests: write/);
+  assert.match(action, /permissions: \{ pull-requests: write \}/);
+});
+
+test('action uploads no artifacts', () => {
+  // The pinned agent script writes no *.log file and no output/ directory, and
+  // matching upload-artifact catches any reintroduced upload step.
+  assert.doesNotMatch(action, /upload-artifact/);
+  assert.doesNotMatch(action, /\*\.log/);
+  assert.doesNotMatch(action, /output\//);
+});
+
 test('follow-up reviews use a stable marker and explicit classifications', () => {
   assert.match(skill, /<!-- agentic-pr-review -->/);
   assert.match(skill, /\*\*resolved\*\*/);

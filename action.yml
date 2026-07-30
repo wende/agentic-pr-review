@@ -66,13 +66,12 @@ inputs:
     required: false
     default: openhands-tools==1.39.0
   lmnr-package:
-    description: Pinned Laminar client package specification
+    description: >
+      Pinned Laminar client package specification. Required only because the
+      pinned agent script imports lmnr unconditionally; this action sends no
+      telemetry to Laminar.
     required: false
     default: lmnr==0.7.57
-  lmnr-api-key:
-    description: Optional Laminar observability key
-    required: false
-    default: ''
   enable-uv-cache:
     description: Enable the shared GitHub Actions uv cache
     required: false
@@ -182,21 +181,25 @@ runs:
         PR_NUMBER: ${{ github.event.pull_request.number }}
         REPOSITORY: ${{ github.repository }}
       run: |
-        review_id="$(
+        if ! review_id="$(
           gh api \
             -X POST \
             "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews" \
             -f body='Agentic review permission check. This pending review is deleted immediately.' \
             --jq '.id'
-        )"
+        )"; then
+          echo "::error::Could not create a pending review. The github-token lacks pull-requests: write. Add 'permissions: { pull-requests: write }' to the review job."
+          exit 1
+        fi
         if [[ -z "$review_id" ]]; then
           echo "::error::Review permission check returned no review ID"
           exit 1
         fi
-        gh api \
+        if ! gh api \
           -X DELETE \
-          "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews/${review_id}" ||
-          echo "::warning::Could not delete the pending permission-check review"
+          "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews/${review_id}"; then
+          echo "::warning::Could not delete pending permission-check review ${review_id}. This is cosmetic; delete it manually if it appears on the pull request."
+        fi
 
     - name: Run agentic review
       shell: bash
@@ -205,12 +208,12 @@ runs:
         OPENHANDS_SDK_PACKAGE: ${{ inputs.openhands-sdk-package }}
         OPENHANDS_TOOLS_PACKAGE: ${{ inputs.openhands-tools-package }}
         LMNR_PACKAGE: ${{ inputs.lmnr-package }}
+        # ACP_COMMAND and ACP_PROMPT_TIMEOUT are deliberately not set: they are
+        # read only when AGENT_KIND is 'acp', and the upstream defaults already
+        # match what this action would pass.
         AGENT_KIND: openhands
-        ACP_COMMAND: ''
-        ACP_PROMPT_TIMEOUT: '1800'
         LLM_MODEL: ${{ inputs.llm-model }}
         LLM_BASE_URL: ${{ inputs.llm-base-url }}
-        REVIEW_STYLE: roasted
         REQUIRE_EVIDENCE: ${{ inputs.require-evidence }}
         USE_SUB_AGENTS: ${{ inputs.use-sub-agents }}
         REVIEW_WRAP_UP_ITERATIONS: ${{ inputs.review-wrap-up-iterations }}
@@ -219,7 +222,6 @@ runs:
         LLM_API_KEY: ${{ inputs.llm-api-key }}
         GITHUB_TOKEN: ${{ inputs.github-token }}
         GH_TOKEN: ${{ inputs.github-token }}
-        LMNR_PROJECT_API_KEY: ${{ inputs.lmnr-api-key }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
         PR_TITLE: ${{ github.event.pull_request.title }}
         PR_BODY: ${{ github.event.pull_request.body }}
@@ -294,14 +296,3 @@ runs:
           "$PR_NUMBER" \
           "$MEMORY_ISSUE_NUMBER" \
           "$(git rev-parse HEAD)"
-
-    - name: Upload review logs
-      if: always()
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-      with:
-        name: agentic-pr-review-logs
-        path: |
-          agentic-review-repo/*.log
-          agentic-review-repo/output/
-        retention-days: 7
-        if-no-files-found: ignore
