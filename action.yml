@@ -19,7 +19,7 @@ inputs:
     description: Model API key
     required: true
   github-token:
-    description: Token used to read PR context and submit reviews
+    description: GitHub token used for PR reviews and repository memory; pass github.token in Actions
     required: true
   use-sub-agents:
     description: Allow the reviewer to delegate large diffs to file-level agents
@@ -39,6 +39,14 @@ inputs:
     default: 'false'
   review-guidance-path:
     description: Optional plain Markdown best-practices file in the consumer repository
+    required: false
+    default: ''
+  memory-enabled:
+    description: Load and update persistent repository review memory through a GitHub issue
+    required: false
+    default: 'true'
+  memory-issue-number:
+    description: Existing memory issue number; when empty, discover or create the repository memory issue
     required: false
     default: ''
   extensions-version:
@@ -96,6 +104,23 @@ runs:
           agentic-review-repo \
           "$GITHUB_ACTION_PATH/skills/follow-up-review.md" \
           "$REVIEW_GUIDANCE_PATH"
+
+    - name: Prepare persistent review memory
+      id: memory
+      if: inputs.memory-enabled == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        MEMORY_ISSUE_NUMBER: ${{ inputs.memory-issue-number }}
+        REPOSITORY: ${{ github.repository }}
+      run: |
+        if ! "$GITHUB_ACTION_PATH/scripts/prepare-memory.sh" \
+            agentic-review-repo \
+            "$GITHUB_ACTION_PATH/skills/repository-memory.md" \
+            "$REPOSITORY" \
+            "$MEMORY_ISSUE_NUMBER"; then
+          echo "::warning::Persistent review memory is unavailable; continuing without it"
+        fi
 
     - name: Set up Python
       uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -175,7 +200,11 @@ runs:
         LOAD_PUBLIC_SKILLS: ${{ inputs.load-public-skills }}
         LLM_API_KEY: ${{ inputs.llm-api-key }}
         GITHUB_TOKEN: ${{ inputs.github-token }}
+        GH_TOKEN: ${{ inputs.github-token }}
         LMNR_PROJECT_API_KEY: ${{ inputs.lmnr-api-key }}
+        AGENT_MEMORY_ISSUE_NUMBER: ${{ steps.memory.outputs.issue-number }}
+        AGENT_MEMORY_ISSUE_URL: ${{ steps.memory.outputs.issue-url }}
+        AGENT_MEMORY_REPOSITORY: ${{ github.repository }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
         PR_TITLE: ${{ github.event.pull_request.title }}
         PR_BODY: ${{ github.event.pull_request.body }}

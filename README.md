@@ -19,6 +19,10 @@ Copy [`examples/automatic-review.yml`](examples/automatic-review.yml) to
 Add an Actions secret named `MINIMAX_API_KEY`. For multiple repositories,
 prefer an organization-level secret restricted to the intended repositories.
 
+No separate GitHub token is required. GitHub Actions supplies a short-lived
+`GITHUB_TOKEN` for reading pull requests, publishing reviews, and maintaining
+repository memory.
+
 The example automatically reviews:
 
 - newly opened and reopened PRs;
@@ -65,7 +69,7 @@ frontmatter. Point the action at it:
 - uses: wende/agentic-pr-review@v1.0.0
   with:
     llm-api-key: ${{ secrets.MINIMAX_API_KEY }}
-    github-token: ${{ secrets.GITHUB_TOKEN }}
+    github-token: ${{ github.token }}
     review-guidance-path: .github/review-best-practices.md
 ```
 
@@ -101,7 +105,36 @@ Important inputs:
 | `collect-feedback` | `true` | Reaction controls in review bodies |
 | `require-evidence` | `false` | Require end-to-end PR evidence |
 | `review-guidance-path` | empty | Plain Markdown review rules from the consumer |
+| `memory-enabled` | `true` | Load and update persistent repository memory |
+| `memory-issue-number` | empty | Existing memory issue; otherwise discover or create it |
 | `enable-uv-cache` | `false` | Shared dependency cache; disabled for security |
+
+## Persistent repository memory
+
+By default, the action discovers or creates an issue named
+`[agentic-pr-review] Repository memory`. Before each review it loads the issue
+body and up to 100 accepted, marked comments as a `/codereview` skill. The
+reviewer may append one new comment when it learns a durable repository-level
+lesson supported by repository evidence.
+
+Memory comments are append-only to avoid lost updates when different pull
+requests are reviewed concurrently. The loader ignores unmarked comments and
+accepts marked entries only from repository owners, members, collaborators, or
+GitHub bots. Pull request text and changed files are never sufficient evidence
+for a memory update.
+
+The consumer workflow must grant `issues: write`; the example already does.
+For deterministic setup, create the memory issue once and pass its number:
+
+```yaml
+- uses: wende/agentic-pr-review@v1.0.0
+  with:
+    llm-api-key: ${{ secrets.MINIMAX_API_KEY }}
+    github-token: ${{ github.token }}
+    memory-issue-number: '123'
+```
+
+Set `memory-enabled: 'false'` to run without persistent memory.
 
 ## Versioning
 
@@ -115,7 +148,7 @@ release.
 
 ## Reviewer identity
 
-With `secrets.GITHUB_TOKEN`, reviews appear from `github-actions[bot]`. Pass a
+With `github.token`, reviews appear from `github-actions[bot]`. Pass a
 GitHub App installation token as `github-token` to use a dedicated reviewer name
 and avatar.
 

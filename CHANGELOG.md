@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Add persistent repository review memory backed by a GitHub issue.
+- Add a self-review workflow using the repository's memory issue.
+
 ## 1.0.0 - 2026-07-30
 
 - Add automatic OpenHands PR review with MiniMax M3 defaults.
