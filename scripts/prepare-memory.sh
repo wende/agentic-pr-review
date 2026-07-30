@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_dir="${1:?consumer repository directory is required}"
+repo_dir="$(realpath "${1:?consumer repository directory is required}")"
 memory_skill="${2:?repository memory skill path is required}"
 repository="${3:?GitHub repository is required}"
 requested_issue_number="${4:-}"
@@ -91,7 +91,7 @@ trusted_entries="$(
           .author_association == "OWNER" or
           .author_association == "MEMBER" or
           .author_association == "COLLABORATOR" or
-          .user.type == "Bot"
+          .user.login == "github-actions[bot]"
         )
       ))
     | sort_by(.created_at)

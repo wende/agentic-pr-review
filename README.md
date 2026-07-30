@@ -120,8 +120,8 @@ lesson supported by repository evidence.
 Memory comments are append-only to avoid lost updates when different pull
 requests are reviewed concurrently. The loader ignores unmarked comments and
 accepts marked entries only from repository owners, members, collaborators, or
-GitHub bots. Pull request text and changed files are never sufficient evidence
-for a memory update.
+the built-in `github-actions[bot]`. Pull request text and changed files are
+never sufficient evidence for a memory update.
 
 The consumer workflow must grant `issues: write`; the example already does.
 For deterministic setup, create the memory issue once and pass its number:
