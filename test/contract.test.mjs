@@ -34,6 +34,10 @@ const memorySkill = await readFile(memorySkillPath, 'utf8');
 const prepareMemory = fileURLToPath(
   new URL('../scripts/prepare-memory.sh', import.meta.url),
 );
+const runAgent = await readFile(
+  new URL('../scripts/run-agent.py', import.meta.url),
+  'utf8',
+);
 const example = await readFile(
   new URL('../examples/automatic-review.yml', import.meta.url),
   'utf8',
@@ -51,9 +55,12 @@ test('action pins upstream code and matching OpenHands packages', () => {
   assert.match(action, /enable-cache: \$\{\{ inputs\.enable-uv-cache \}\}/);
 });
 
-test('MiniMax uses its native LiteLLM provider metadata', () => {
-  assert.match(action, /default: minimax\/MiniMax-M3/);
-  assert.doesNotMatch(action, /openai\/MiniMax-M3/);
+test('MiniMax keeps its adapter behavior while registering cost metadata', () => {
+  assert.match(action, /default: openai\/MiniMax-M3/);
+  assert.match(action, /scripts\/run-agent\.py/);
+  assert.match(runAgent, /"openai\/MiniMax-M3": "minimax\/MiniMax-M3"/);
+  assert.match(runAgent, /litellm\.register_model/);
+  assert.doesNotMatch(runAgent, /supports_function_calling|supports_reasoning/);
 });
 
 test('follow-up reviews use a stable marker and explicit classifications', () => {

@@ -10,7 +10,7 @@ inputs:
   llm-model:
     description: LiteLLM model identifier
     required: false
-    default: minimax/MiniMax-M3
+    default: openai/MiniMax-M3
   llm-base-url:
     description: OpenAI-compatible model API base URL
     required: false
@@ -211,7 +211,8 @@ runs:
           --with "$OPENHANDS_SDK_PACKAGE" \
           --with "$OPENHANDS_TOOLS_PACKAGE" \
           --with "$LMNR_PACKAGE" \
-          python ../agentic-review-extensions/plugins/pr-review/scripts/agent_script.py
+          python "$GITHUB_ACTION_PATH/scripts/run-agent.py" \
+            ../agentic-review-extensions/plugins/pr-review/scripts/agent_script.py
 
     - name: Upload review logs
       if: always()
