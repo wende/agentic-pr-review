@@ -272,6 +272,14 @@ test('follow-up reviews use a stable marker and explicit classifications', () =>
   assert.match(skill, /Do not post a duplicate inline comment/);
 });
 
+test('follow-up protocol defers to the code review layout', () => {
+  // Both skills trigger on /codereview and the code review skill is injected
+  // last, so a competing layout here is one the reviewer has to reconcile on
+  // every run. Slot the follow-up section into that layout instead.
+  assert.match(skill, /Keep the review layout the code review instructions/);
+  assert.doesNotMatch(skill, /`New findings`/);
+});
+
 test('plain repository guidance is wrapped as a codereview skill', () => {
   assert.match(action, /review-guidance-path:/);
   assert.match(action, /scripts\/install-guidance\.sh/);
