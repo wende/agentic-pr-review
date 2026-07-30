@@ -1,0 +1,9 @@
+# Changelog
+
+## 1.0.0 - 2026-07-30
+
+- Add automatic OpenHands PR review with MiniMax M3 defaults.
+- Add full-repository and file-level sub-agent inspection.
+- Track resolved, still-present, obsolete, and new findings across reruns.
+- Pin upstream review code, Python packages, and nested GitHub Actions.
+- Provide an advisory, same-repository automatic workflow example.

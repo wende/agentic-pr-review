@@ -1,0 +1,196 @@
+name: Agentic PR Review
+description: OpenHands-based pull request review with full-repository tools and follow-up awareness
+author: wende
+
+branding:
+  icon: search
+  color: purple
+
+inputs:
+  llm-model:
+    description: LiteLLM model identifier
+    required: false
+    default: openai/MiniMax-M3
+  llm-base-url:
+    description: OpenAI-compatible model API base URL
+    required: false
+    default: https://api.minimax.io/v1
+  llm-api-key:
+    description: Model API key
+    required: true
+  github-token:
+    description: Token used to read PR context and submit reviews
+    required: true
+  use-sub-agents:
+    description: Allow the reviewer to delegate large diffs to file-level agents
+    required: false
+    default: 'true'
+  load-public-skills:
+    description: Load the OpenHands public skill catalog
+    required: false
+    default: 'true'
+  collect-feedback:
+    description: Add reaction-based feedback controls to the review body
+    required: false
+    default: 'true'
+  require-evidence:
+    description: Require end-to-end evidence in the PR description
+    required: false
+    default: 'false'
+  extensions-version:
+    description: Pinned OpenHands extensions commit
+    required: false
+    default: 9def413cc05fa8287ed236d846af85f977baea45
+  openhands-sdk-package:
+    description: Pinned OpenHands SDK package specification
+    required: false
+    default: openhands-sdk==1.39.0
+  openhands-tools-package:
+    description: Pinned OpenHands tools package specification
+    required: false
+    default: openhands-tools==1.39.0
+  lmnr-package:
+    description: Pinned Laminar client package specification
+    required: false
+    default: lmnr==0.7.57
+  lmnr-api-key:
+    description: Optional Laminar observability key
+    required: false
+    default: ''
+  enable-uv-cache:
+    description: Enable the shared GitHub Actions uv cache
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Checkout pinned OpenHands extensions
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        repository: OpenHands/extensions
+        ref: ${{ inputs.extensions-version }}
+        path: agentic-review-extensions
+        persist-credentials: false
+
+    - name: Checkout pull request repository
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        repository: ${{ github.event.pull_request.head.repo.full_name }}
+        ref: ${{ github.event.pull_request.head.ref }}
+        fetch-depth: 0
+        persist-credentials: false
+        path: agentic-review-repo
+        submodules: recursive
+
+    - name: Install follow-up review guidance
+      shell: bash
+      run: |
+        mkdir -p agentic-review-repo/.agents/skills
+        install -m 0644 \
+          "$GITHUB_ACTION_PATH/skills/follow-up-review.md" \
+          agentic-review-repo/.agents/skills/agentic-review-follow-up.md
+
+    - name: Set up Python
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      with:
+        python-version: '3.12'
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      with:
+        enable-cache: ${{ inputs.enable-uv-cache }}
+
+    - name: Validate configuration
+      shell: bash
+      env:
+        LLM_API_KEY: ${{ inputs.llm-api-key }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        LLM_MODEL: ${{ inputs.llm-model }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: |
+        if [[ -z "$LLM_API_KEY" ]]; then
+          echo "::error::llm-api-key is required"
+          exit 1
+        fi
+        if [[ -z "$GITHUB_TOKEN" ]]; then
+          echo "::error::github-token is required"
+          exit 1
+        fi
+        if [[ -z "$LLM_MODEL" ]]; then
+          echo "::error::llm-model is required"
+          exit 1
+        fi
+        if [[ -z "$PR_NUMBER" ]]; then
+          echo "::error::Agentic PR Review must run from a pull_request event"
+          exit 1
+        fi
+
+    - name: Verify review permission
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        REPOSITORY: ${{ github.repository }}
+      run: |
+        review_id="$(
+          gh api \
+            -X POST \
+            "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews" \
+            -f body='Agentic review permission check. This pending review is deleted immediately.' \
+            --jq '.id'
+        )"
+        if [[ -z "$review_id" ]]; then
+          echo "::error::Review permission check returned no review ID"
+          exit 1
+        fi
+        gh api \
+          -X DELETE \
+          "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews/${review_id}" ||
+          echo "::warning::Could not delete the pending permission-check review"
+
+    - name: Run agentic review
+      shell: bash
+      env:
+        UV_PYTHON: '3.12'
+        OPENHANDS_SDK_PACKAGE: ${{ inputs.openhands-sdk-package }}
+        OPENHANDS_TOOLS_PACKAGE: ${{ inputs.openhands-tools-package }}
+        LMNR_PACKAGE: ${{ inputs.lmnr-package }}
+        AGENT_KIND: openhands
+        ACP_COMMAND: ''
+        ACP_PROMPT_TIMEOUT: '1800'
+        LLM_MODEL: ${{ inputs.llm-model }}
+        LLM_BASE_URL: ${{ inputs.llm-base-url }}
+        REVIEW_STYLE: roasted
+        REQUIRE_EVIDENCE: ${{ inputs.require-evidence }}
+        COLLECT_FEEDBACK: ${{ inputs.collect-feedback }}
+        REVIEW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        USE_SUB_AGENTS: ${{ inputs.use-sub-agents }}
+        LOAD_PUBLIC_SKILLS: ${{ inputs.load-public-skills }}
+        LLM_API_KEY: ${{ inputs.llm-api-key }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        LMNR_PROJECT_API_KEY: ${{ inputs.lmnr-api-key }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        PR_TITLE: ${{ github.event.pull_request.title }}
+        PR_BODY: ${{ github.event.pull_request.body }}
+        PR_BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+        PR_HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+        REPO_NAME: ${{ github.repository }}
+      run: |
+        cd agentic-review-repo
+        uv run --no-project \
+          --with "$OPENHANDS_SDK_PACKAGE" \
+          --with "$OPENHANDS_TOOLS_PACKAGE" \
+          --with "$LMNR_PACKAGE" \
+          python ../agentic-review-extensions/plugins/pr-review/scripts/agent_script.py
+
+    - name: Upload review logs
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: agentic-pr-review-logs
+        path: |
+          agentic-review-repo/*.log
+          agentic-review-repo/output/
+        retention-days: 7
+        if-no-files-found: ignore
