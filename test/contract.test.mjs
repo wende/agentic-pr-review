@@ -125,6 +125,29 @@ test('wall-clock budgets bound investigation independently of iteration counts',
   assert.match(runAgent, /time\.monotonic\(\)/);
 });
 
+test('every wrap-up budget stays below the hard ceiling that cuts the agent off', () => {
+  // Sub-agents inherit the coordinator's max_iteration_per_run. A wrap-up above
+  // that ceiling never fires, so the delegated review is cut off mid-flight
+  // without ever being told to report the findings it already has.
+  assert.match(
+    action,
+    /subagent-wrap-up-iterations must be less than max-review-iterations/,
+  );
+  assert.match(
+    action,
+    /"\$SUBAGENT_WRAP_UP_ITERATIONS" -ge "\$MAX_REVIEW_ITERATIONS"/,
+  );
+  // Direct env-var callers bypass the bash validation entirely.
+  assert.match(
+    runAgent,
+    /if subagent_wrap_up_iterations >= max_iterations:/,
+  );
+  assert.match(
+    runAgent,
+    /SUBAGENT_WRAP_UP_ITERATIONS must be less than MAX_REVIEW_ITERATIONS/,
+  );
+});
+
 test('delegated reviews are steered, not just the coordinator', () => {
   // Rebinding Conversation in the agent script's globals only reaches the
   // coordinator; sub-agents are built by the SDK's TaskManager.
@@ -234,6 +257,9 @@ def main():
           MAX_REVIEW_ITERATIONS: '4',
           PYTHONPATH: root,
           REVIEW_WRAP_UP_ITERATIONS: '2',
+          // Must clear the artificially low ceiling this test sets; the 25
+          // default would otherwise exceed it and be rejected.
+          SUBAGENT_WRAP_UP_ITERATIONS: '2',
         },
       },
     );
@@ -352,7 +378,9 @@ def main():
           PYTHONPATH: root,
           REVIEW_WRAP_UP_ITERATIONS: '2',
           REVIEW_WRAP_UP_SECONDS: '1000',
-          SUBAGENT_WRAP_UP_ITERATIONS: '99',
+          // Below MAX_REVIEW_ITERATIONS, which sub-agents inherit as their hard
+          // ceiling, and high enough that the seconds budget is what trips.
+          SUBAGENT_WRAP_UP_ITERATIONS: '9',
           SUBAGENT_WRAP_UP_SECONDS: '0.01',
         },
       },

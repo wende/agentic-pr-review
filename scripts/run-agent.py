@@ -249,9 +249,16 @@ def main() -> None:
         or subagent_wrap_up_iterations < 1
     ):
         raise SystemExit("Review iteration limits must be positive integers")
+    # Sub-agents inherit the coordinator's max_iteration_per_run as their hard
+    # ceiling, so a wrap-up above it would never fire and the delegated review
+    # would be cut off without ever being told to report what it found.
     if wrap_up_iterations >= max_iterations:
         raise SystemExit(
             "REVIEW_WRAP_UP_ITERATIONS must be less than MAX_REVIEW_ITERATIONS"
+        )
+    if subagent_wrap_up_iterations >= max_iterations:
+        raise SystemExit(
+            "SUBAGENT_WRAP_UP_ITERATIONS must be less than MAX_REVIEW_ITERATIONS"
         )
 
     try:

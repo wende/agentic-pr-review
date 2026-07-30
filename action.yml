@@ -313,6 +313,10 @@ runs:
           echo "::error::subagent-wrap-up-iterations must be a positive integer"
           exit 1
         fi
+        if [[ "$SUBAGENT_WRAP_UP_ITERATIONS" -ge "$MAX_REVIEW_ITERATIONS" ]]; then
+          echo "::error::subagent-wrap-up-iterations must be less than max-review-iterations"
+          exit 1
+        fi
         if [[ ! "$REVIEW_WRAP_UP_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
           echo "::error::review-wrap-up-seconds must be a positive integer"
           exit 1
