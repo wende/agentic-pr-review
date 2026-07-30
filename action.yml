@@ -181,16 +181,23 @@ runs:
         PR_NUMBER: ${{ github.event.pull_request.number }}
         REPOSITORY: ${{ github.repository }}
       run: |
+        # Any gh failure reaches this branch (missing scope, network, rate
+        # limit, wrong PR). Soften the claim and surface gh's stderr so the
+        # message is accurate when the cause is not the write scope.
+        err_file="$(mktemp)"
         if ! review_id="$(
           gh api \
             -X POST \
             "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews" \
             -f body='Agentic review permission check. This pending review is deleted immediately.' \
-            --jq '.id'
+            --jq '.id' 2>"$err_file"
         )"; then
-          echo "::error::Could not create a pending review. The github-token lacks pull-requests: write. Add 'permissions: { pull-requests: write }' to the review job."
+          err="$(tr '\n' ' ' <"$err_file" | sed 's/[[:space:]]\{1,\}/ /g; s/[[:space:]]*$//')"
+          rm -f "$err_file"
+          echo "::error::Could not create a pending review (permission preflight failed). The most common cause is a github-token without pull-requests: write — add 'permissions: { pull-requests: write }' to the review job. gh: ${err:-no details}"
           exit 1
         fi
+        rm -f "$err_file"
         if [[ -z "$review_id" ]]; then
           echo "::error::Review permission check returned no review ID"
           exit 1

@@ -241,9 +241,14 @@ test('no Laminar telemetry is configured', () => {
   assert.match(action, /default: lmnr==0\.7\.57/);
 });
 
-test('permission preflight explains a missing pull-requests scope', () => {
-  assert.match(action, /lacks pull-requests: write/);
+test('permission preflight surfaces gh errors without overclaiming the cause', () => {
+  // The wrapper catches any gh failure; the message must name the common fix
+  // without asserting that every failure is a missing write scope, and must
+  // include gh's stderr for the cases that are not.
+  assert.match(action, /most common cause is a github-token without pull-requests: write/);
   assert.match(action, /permissions: \{ pull-requests: write \}/);
+  assert.match(action, /2>"\$err_file"/);
+  assert.match(action, /gh: \$\{err:-no details\}/);
 });
 
 test('action uploads no artifacts', () => {

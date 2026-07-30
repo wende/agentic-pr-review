@@ -11,9 +11,9 @@
   60-iteration ceiling.
 - Verify that the current run publishes a new marked review.
 - Remove the unused reaction-based review feedback footer.
-- Explain the missing `pull-requests: write` scope when the review permission
-  preflight cannot create a pending review, and name the leftover review ID when
-  cleanup fails.
+- Explain permission-preflight failures without overclaiming the cause: name
+  the usual `pull-requests: write` fix, surface `gh`'s stderr, and name the
+  leftover review ID when cleanup fails.
 - Stop passing `REVIEW_STYLE`, `ACP_COMMAND`, and `ACP_PROMPT_TIMEOUT`; the
   pinned agent ignores all three under `AGENT_KIND: openhands`.
 - Remove the log artifact upload, which only matched paths the pinned agent
