@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 import runpy
 import sys
+import time
 from pathlib import Path
 from types import MethodType
 
@@ -27,11 +28,25 @@ marked GitHub review. You may use tools only to create and post that review.
 If there are no actionable findings, post a concise marked COMMENT review
 stating that. The review is incomplete until it is published."""
 
+SUBAGENT_WRAP_UP_MESSAGE = """\
+Your investigation budget is exhausted. Stop investigating now. Do not read
+more files, search, or run further commands. Using only the evidence already
+gathered, immediately return your structured findings to the coordinator.
+Report partial findings rather than nothing; omitting what you already found
+is worse than reporting it without further verification."""
 
-def steer_agent_to_wrap_up(agent: object, wrap_up_iterations: int) -> None:
+
+def steer_agent_to_wrap_up(
+    agent: object,
+    wrap_up_iterations: int,
+    wrap_up_seconds: float,
+    message: str,
+    label: str,
+) -> None:
     original_step = agent.step
     completed_steps = 0
     wrap_up_sent = False
+    started_at: float | None = None
 
     def steered_step(
         _agent: object,
@@ -39,8 +54,24 @@ def steer_agent_to_wrap_up(agent: object, wrap_up_iterations: int) -> None:
         *args: object,
         **kwargs: object,
     ) -> object:
-        nonlocal completed_steps, wrap_up_sent
-        if completed_steps >= wrap_up_iterations and not wrap_up_sent:
+        nonlocal completed_steps, wrap_up_sent, started_at
+        # Start the clock on the first step so the budget covers agent work
+        # rather than dependency installation and repository checkout.
+        if started_at is None:
+            started_at = time.monotonic()
+        elapsed = time.monotonic() - started_at
+
+        # Iteration count is a poor proxy for wall time: per-turn latency grows
+        # with context size, so a fixed iteration budget can span wildly
+        # different durations. Whichever bound trips first ends investigation.
+        if not wrap_up_sent and (
+            completed_steps >= wrap_up_iterations or elapsed >= wrap_up_seconds
+        ):
+            reason = (
+                f"{completed_steps} completed iterations"
+                if completed_steps >= wrap_up_iterations
+                else f"{elapsed:.0f}s elapsed"
+            )
             # The SDK run loop holds the conversation-state lock while calling
             # agent.step(). Mirror its stop-hook feedback path by appending the
             # environment message directly instead of calling send_message().
@@ -50,16 +81,13 @@ def steer_agent_to_wrap_up(agent: object, wrap_up_iterations: int) -> None:
                     llm_message=openhands.sdk.Message(
                         role="user",
                         content=[
-                            openhands.sdk.TextContent(text=WRAP_UP_MESSAGE),
+                            openhands.sdk.TextContent(text=message),
                         ],
                     ),
                 )
             )
             wrap_up_sent = True
-            print(
-                "Injected review wrap-up instruction after "
-                f"{completed_steps} completed iterations"
-            )
+            print(f"Injected {label} wrap-up instruction after {reason}")
         result = original_step(conversation, *args, **kwargs)
         completed_steps += 1
         return result
@@ -74,6 +102,9 @@ def steer_agent_to_wrap_up(agent: object, wrap_up_iterations: int) -> None:
 def steer_conversation_to_wrap_up(
     conversation: object,
     wrap_up_iterations: int,
+    wrap_up_seconds: float,
+    message: str,
+    label: str,
 ) -> None:
     # Plugin loading creates a Pydantic copy of the agent, so installing the
     # step wrapper before the SDK's lazy initialization would bind it to an
@@ -93,6 +124,9 @@ def steer_conversation_to_wrap_up(
             steer_agent_to_wrap_up(
                 _conversation.agent,
                 wrap_up_iterations,
+                wrap_up_seconds,
+                message,
+                label,
             )
             steering_installed = True
         return result
@@ -104,9 +138,49 @@ def steer_conversation_to_wrap_up(
     )
 
 
+def steer_subagents_to_wrap_up(
+    wrap_up_iterations: int,
+    wrap_up_seconds: float,
+) -> None:
+    """Bound delegated file reviews the same way the coordinator is bounded.
+
+    Rebinding ``Conversation`` in the agent script's globals only reaches the
+    conversation that script constructs. Sub-agents are built inside the SDK by
+    ``TaskManager``, which imports ``LocalConversation`` directly, so they
+    inherit the coordinator's hard iteration cap but never receive a wrap-up
+    signal. Patch the factory itself so every delegated review is steered too.
+    """
+    try:
+        from openhands.tools.task.manager import TaskManager
+    except ImportError:
+        # Delegation is optional; without the task tools there is nothing to
+        # steer and the coordinator's own budget already bounds the review.
+        return
+
+    original_get_conversation = TaskManager._get_conversation
+
+    def get_conversation_then_steer(
+        self: object,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        conversation = original_get_conversation(self, *args, **kwargs)
+        steer_conversation_to_wrap_up(
+            conversation,
+            wrap_up_iterations,
+            wrap_up_seconds,
+            SUBAGENT_WRAP_UP_MESSAGE,
+            "sub-agent review",
+        )
+        return conversation
+
+    TaskManager._get_conversation = get_conversation_then_steer
+
+
 def configured_symbols(
     model: str,
     wrap_up_iterations: int,
+    wrap_up_seconds: float,
     max_iterations: int,
 ) -> tuple[object, object]:
     canonical_model = MODEL_COST_ALIASES.get(model)
@@ -140,6 +214,9 @@ def configured_symbols(
         steer_conversation_to_wrap_up(
             conversation,
             wrap_up_iterations,
+            wrap_up_seconds,
+            WRAP_UP_MESSAGE,
+            "review",
         )
         return conversation
 
@@ -159,21 +236,58 @@ def main() -> None:
             os.environ.get("REVIEW_WRAP_UP_ITERATIONS", "40")
         )
         max_iterations = int(os.environ.get("MAX_REVIEW_ITERATIONS", "60"))
+        subagent_wrap_up_iterations = int(
+            os.environ.get("SUBAGENT_WRAP_UP_ITERATIONS", "25")
+        )
     except ValueError as error:
         raise SystemExit(
             "Review iteration limits must be positive integers"
         ) from error
-    if wrap_up_iterations < 1 or max_iterations < 1:
+    if (
+        wrap_up_iterations < 1
+        or max_iterations < 1
+        or subagent_wrap_up_iterations < 1
+    ):
         raise SystemExit("Review iteration limits must be positive integers")
+    # Sub-agents inherit the coordinator's max_iteration_per_run as their hard
+    # ceiling, so a wrap-up above it would never fire and the delegated review
+    # would be cut off without ever being told to report what it found.
     if wrap_up_iterations >= max_iterations:
         raise SystemExit(
             "REVIEW_WRAP_UP_ITERATIONS must be less than MAX_REVIEW_ITERATIONS"
+        )
+    if subagent_wrap_up_iterations >= max_iterations:
+        raise SystemExit(
+            "SUBAGENT_WRAP_UP_ITERATIONS must be less than MAX_REVIEW_ITERATIONS"
+        )
+
+    try:
+        wrap_up_seconds = float(
+            os.environ.get("REVIEW_WRAP_UP_SECONDS", "1200")
+        )
+        subagent_wrap_up_seconds = float(
+            os.environ.get("SUBAGENT_WRAP_UP_SECONDS", "600")
+        )
+    except ValueError as error:
+        raise SystemExit(
+            "Review time budgets must be positive numbers"
+        ) from error
+    if wrap_up_seconds <= 0 or subagent_wrap_up_seconds <= 0:
+        raise SystemExit("Review time budgets must be positive numbers")
+    if subagent_wrap_up_seconds >= wrap_up_seconds:
+        raise SystemExit(
+            "SUBAGENT_WRAP_UP_SECONDS must be less than REVIEW_WRAP_UP_SECONDS"
         )
 
     llm_factory, conversation_factory = configured_symbols(
         os.environ.get("LLM_MODEL", ""),
         wrap_up_iterations,
+        wrap_up_seconds,
         max_iterations,
+    )
+    steer_subagents_to_wrap_up(
+        subagent_wrap_up_iterations,
+        subagent_wrap_up_seconds,
     )
     agent_globals = runpy.run_path(
         str(agent_script),

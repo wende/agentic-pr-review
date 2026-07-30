@@ -92,15 +92,72 @@ test('coordinator gets a wrap-up phase before the hard iteration ceiling', () =>
   assert.match(runAgent, /max_iteration_per_run/);
   assert.match(runAgent, /kwargs\["max_iteration_per_run"\] = max_iterations/);
   assert.match(runAgent, /steer_agent_to_wrap_up/);
-  assert.match(runAgent, /Injected review wrap-up instruction/);
+  assert.match(runAgent, /Injected \{label\} wrap-up instruction after \{reason\}/);
   assert.match(runAgent, /Stop investigating now/);
   assert.match(runAgent, /MessageEvent/);
   assert.match(runAgent, /MethodType/);
   assert.match(runAgent, /_agentic_pr_review_upstream/);
   assert.match(runAgent, /agent_main\.__globals__\["Conversation"\]/);
   assert.doesNotMatch(runAgent, /openhands\.sdk\.(LLM|Conversation)\s*=/);
-  assert.match(selfReview, /use-sub-agents: 'false'/);
+  // The self-review must exercise the delegation path consumers get by
+  // default, otherwise sub-agent steering ships untested against a real model.
+  assert.match(selfReview, /use-sub-agents: 'true'/);
   assert.match(selfReview, /load-public-skills: 'false'/);
+});
+
+test('wall-clock budgets bound investigation independently of iteration counts', () => {
+  // Per-turn latency grows with context size, so an iteration budget alone
+  // cannot bound how long a review takes. Both bounds must be configurable.
+  assert.match(action, /review-wrap-up-seconds:/);
+  assert.match(action, /subagent-wrap-up-seconds:/);
+  assert.match(action, /subagent-wrap-up-iterations:/);
+  assert.match(action, /REVIEW_WRAP_UP_SECONDS/);
+  assert.match(action, /SUBAGENT_WRAP_UP_SECONDS/);
+  assert.match(action, /SUBAGENT_WRAP_UP_ITERATIONS/);
+  assert.match(
+    action,
+    /subagent-wrap-up-seconds must be less than review-wrap-up-seconds/,
+  );
+  assert.equal((action.match(/default: '1200'/g) ?? []).length, 1);
+  assert.equal((action.match(/default: '600'/g) ?? []).length, 1);
+  assert.equal((action.match(/default: '25'/g) ?? []).length, 1);
+  assert.match(runAgent, /completed_steps >= wrap_up_iterations or elapsed >= wrap_up_seconds/);
+  assert.match(runAgent, /time\.monotonic\(\)/);
+});
+
+test('every wrap-up budget stays below the hard ceiling that cuts the agent off', () => {
+  // Sub-agents inherit the coordinator's max_iteration_per_run. A wrap-up above
+  // that ceiling never fires, so the delegated review is cut off mid-flight
+  // without ever being told to report the findings it already has.
+  assert.match(
+    action,
+    /subagent-wrap-up-iterations must be less than max-review-iterations/,
+  );
+  assert.match(
+    action,
+    /"\$SUBAGENT_WRAP_UP_ITERATIONS" -ge "\$MAX_REVIEW_ITERATIONS"/,
+  );
+  // Direct env-var callers bypass the bash validation entirely.
+  assert.match(
+    runAgent,
+    /if subagent_wrap_up_iterations >= max_iterations:/,
+  );
+  assert.match(
+    runAgent,
+    /SUBAGENT_WRAP_UP_ITERATIONS must be less than MAX_REVIEW_ITERATIONS/,
+  );
+});
+
+test('delegated reviews are steered, not just the coordinator', () => {
+  // Rebinding Conversation in the agent script's globals only reaches the
+  // coordinator; sub-agents are built by the SDK's TaskManager.
+  assert.match(runAgent, /steer_subagents_to_wrap_up/);
+  assert.match(runAgent, /from openhands\.tools\.task\.manager import TaskManager/);
+  assert.match(runAgent, /TaskManager\._get_conversation = get_conversation_then_steer/);
+  assert.match(runAgent, /SUBAGENT_WRAP_UP_MESSAGE/);
+  assert.match(runAgent, /return your structured findings to the coordinator/);
+  // Delegation is optional, so a missing task toolset must not be fatal.
+  assert.match(runAgent, /except ImportError:/);
 });
 
 test('wrap-up steering follows the initialized agent created during plugin loading', async () => {
@@ -200,12 +257,141 @@ def main():
           MAX_REVIEW_ITERATIONS: '4',
           PYTHONPATH: root,
           REVIEW_WRAP_UP_ITERATIONS: '2',
+          // Must clear the artificially low ceiling this test sets; the 25
+          // default would otherwise exceed it and be rejected.
+          SUBAGENT_WRAP_UP_ITERATIONS: '2',
         },
       },
     );
     assert.match(
       result.stdout,
       /Injected review wrap-up instruction after 2 completed iterations/,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('delegated conversations wrap up on their own iteration and time budgets', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agentic-subagent-'));
+  const openhands = join(root, 'openhands');
+  const task = join(openhands, 'tools', 'task');
+  const upstream = join(root, 'agent_script.py');
+  await mkdir(task, { recursive: true });
+  await writeFile(join(root, 'litellm.py'), 'model_cost = {}\n');
+  await writeFile(join(openhands, '__init__.py'), '');
+  await writeFile(join(openhands, 'tools', '__init__.py'), '');
+  await writeFile(join(task, '__init__.py'), '');
+  await writeFile(
+    join(openhands, 'sdk.py'),
+    `import time
+from copy import copy
+
+class MessageEvent:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+class Message:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+class TextContent:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+class LLM:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+class FakeAgent:
+    def __init__(self):
+        self._initialized = False
+
+    def model_copy(self):
+        return copy(self)
+
+    def initialize(self):
+        self._initialized = True
+
+    def step(self, conversation, **kwargs):
+        if not self._initialized:
+            raise RuntimeError("Agent not initialized")
+        # Give the wall-clock budget something to measure.
+        time.sleep(0.02)
+
+class Conversation:
+    def __init__(self, agent, max_iteration_per_run=None):
+        self.agent = agent
+        self.max_iteration_per_run = max_iteration_per_run
+        self.events = []
+        self.ready = False
+
+    def _on_event(self, event):
+        self.events.append(event)
+
+    def _ensure_agent_ready(self):
+        if self.ready:
+            return
+        self.agent = self.agent.model_copy()
+        self.agent.initialize()
+        self.ready = True
+
+    def run(self, steps):
+        self._ensure_agent_ready()
+        for _ in range(steps):
+            self.agent.step(self)
+        assert len(self.events) == 1, self.events
+`,
+  );
+  await writeFile(
+    join(task, 'manager.py'),
+    `from openhands.sdk import Conversation
+
+class TaskManager:
+    def _get_conversation(self, agent, max_iteration_per_run=None):
+        return Conversation(agent, max_iteration_per_run=max_iteration_per_run)
+`,
+  );
+  await writeFile(
+    upstream,
+    `from openhands.sdk import Conversation, FakeAgent, LLM
+from openhands.tools.task.manager import TaskManager
+
+def main():
+    LLM(model="test")
+    # The coordinator trips its iteration budget first.
+    Conversation(FakeAgent()).run(4)
+    # The delegated review trips its wall-clock budget first.
+    TaskManager()._get_conversation(FakeAgent()).run(4)
+`,
+  );
+
+  try {
+    const result = await execFileAsync(
+      'python3',
+      [fileURLToPath(new URL('../scripts/run-agent.py', import.meta.url)), upstream],
+      {
+        env: {
+          ...process.env,
+          LLM_MODEL: 'test',
+          MAX_REVIEW_ITERATIONS: '10',
+          PYTHONPATH: root,
+          REVIEW_WRAP_UP_ITERATIONS: '2',
+          REVIEW_WRAP_UP_SECONDS: '1000',
+          // Below MAX_REVIEW_ITERATIONS, which sub-agents inherit as their hard
+          // ceiling, and high enough that the seconds budget is what trips.
+          SUBAGENT_WRAP_UP_ITERATIONS: '9',
+          SUBAGENT_WRAP_UP_SECONDS: '0.01',
+        },
+      },
+    );
+    assert.match(
+      result.stdout,
+      /Injected review wrap-up instruction after 2 completed iterations/,
+    );
+    assert.match(
+      result.stdout,
+      /Injected sub-agent review wrap-up instruction after \d+s elapsed/,
     );
   } finally {
     await rm(root, { recursive: true, force: true });
