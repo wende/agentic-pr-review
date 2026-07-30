@@ -70,6 +70,15 @@ test('coordinator and delegated reviews have an iteration ceiling', () => {
   assert.match(action, /MAX_REVIEW_ITERATIONS/);
   assert.match(runAgent, /max_iteration_per_run/);
   assert.match(selfReview, /use-sub-agents: 'false'/);
+  assert.match(selfReview, /load-public-skills: 'false'/);
+});
+
+test('review protocol budgets exploration and requires publication', () => {
+  assert.match(skill, /at most 35 tool actions/);
+  assert.match(skill, /Reserve the final five tool actions/);
+  assert.match(skill, /review is not complete until that marked review is posted/);
+  assert.match(action, /Agent exited without posting a marked review/);
+  assert.match(action, /startsWith|startswith/);
 });
 
 test('follow-up reviews use a stable marker and explicit classifications', () => {

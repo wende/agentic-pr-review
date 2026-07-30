@@ -115,6 +115,11 @@ Important inputs:
 | `memory-issue-number` | empty | Existing memory issue; otherwise discover or create it |
 | `enable-uv-cache` | `false` | Shared dependency cache; disabled for security |
 
+The built-in review protocol budgets at most 35 tool actions for investigation
+and reserves its final actions for publishing. The Action separately enforces
+the iteration ceiling and fails the review step if the agent exits without
+posting a marked review for the current commit.
+
 ## Persistent repository memory
 
 By default, the action discovers or creates an issue named

@@ -44,6 +44,22 @@ reference it in the follow-up summary. Post inline comments for new findings,
 materially changed failure modes, or incomplete fixes that need new evidence.
 Read other reviewers' comments too and do not duplicate still-relevant findings.
 
+## Execution budget
+
+Complete the review in at most 35 tool actions:
+
+- Start from the supplied changed-file manifest and diff. Batch related file
+  reads, searches, and checks into a single tool action when practical.
+- Do not reread a file, repeat a search, or rerun a check unless new evidence
+  invalidated the earlier result.
+- Inspect dependency implementation only when the changed code relies on an
+  uncertain contract that repository code, documentation, and tests cannot
+  establish.
+- Reserve the final five tool actions to compose, validate, and submit the
+  GitHub review. A review is not complete until that marked review is posted.
+- When the exploration budget is exhausted, stop investigating and submit the
+  best evidence-backed review supported by the work already completed.
+
 Only report findings caused by the pull request that the author can act on.
 Include concrete evidence: affected path and line, the triggering execution
 path or scenario, and the user-visible consequence. Do not modify the

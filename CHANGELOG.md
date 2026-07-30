@@ -6,6 +6,7 @@
 - Add a self-review workflow using the repository's memory issue.
 - Supply MiniMax prices to telemetry without changing its OpenAI-compatible request path.
 - Bound the coordinator and each delegated reviewer to 50 iterations by default.
+- Budget review exploration and verify that the current commit receives a marked review.
 - Remove the unused reaction-based review feedback footer.
 
 ## 1.0.0 - 2026-07-30

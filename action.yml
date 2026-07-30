@@ -224,6 +224,24 @@ runs:
           python "$GITHUB_ACTION_PATH/scripts/run-agent.py" \
             ../agentic-review-extensions/plugins/pr-review/scripts/agent_script.py
 
+        head_commit="$(git rev-parse HEAD)"
+        marked_reviews="$(
+          gh api --paginate --slurp \
+            "repos/${REPO_NAME}/pulls/${PR_NUMBER}/reviews?per_page=100" |
+            jq --arg sha "$head_commit" '
+              (if length > 0 and (.[0] | type) == "array" then add else . end)
+              | map(select(
+                  .commit_id == $sha and
+                  ((.body // "") | startswith("<!-- agentic-pr-review -->"))
+                ))
+              | length
+            '
+        )"
+        if [[ "$marked_reviews" -lt 1 ]]; then
+          echo "::error::Agent exited without posting a marked review for $head_commit"
+          exit 1
+        fi
+
     - name: Upload review logs
       if: always()
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

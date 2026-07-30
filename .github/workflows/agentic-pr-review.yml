@@ -32,3 +32,4 @@ jobs:
           github-token: ${{ github.token }}
           memory-issue-number: '1'
           use-sub-agents: 'false'
+          load-public-skills: 'false'
