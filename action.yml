@@ -59,6 +59,10 @@ inputs:
       comment on the pull request instead. Set to 0 to review any size.
     required: false
     default: '10000'
+  skip-label:
+    description: Pull request label that skips the review; empty disables the check
+    required: false
+    default: skip-review
   extensions-version:
     description: Pinned OpenHands extensions commit
     required: false
@@ -86,10 +90,26 @@ inputs:
 runs:
   using: composite
   steps:
+    # Label check is free (event payload) and runs first so a labelled PR
+    # never pays for the size API call. Every later step is also gated on
+    # steps.skip; see the contract test that enforces that.
+    - name: Evaluate skip label
+      id: skip
+      shell: bash
+      env:
+        SKIP: ${{ inputs.skip-label != '' && contains(github.event.pull_request.labels.*.name, inputs.skip-label) }}
+        SKIP_LABEL: ${{ inputs.skip-label }}
+      run: |
+        echo "skip=${SKIP}" >> "$GITHUB_OUTPUT"
+        if [[ "$SKIP" == "true" ]]; then
+          echo "::notice::Skipping the review because the pull request carries the '${SKIP_LABEL}' label"
+        fi
+
     # Runs before the checkouts so an oversized pull request costs one API
     # call rather than a full clone and a model run. Every later step is
     # gated on the result; see the contract test that enforces that.
     - name: Check pull request size
+      if: steps.skip.outputs.skip != 'true'
       id: size
       shell: bash
       env:
@@ -114,7 +134,7 @@ runs:
           "$additions" "$deletions" "$MAX_CHANGED_LINES"
 
     - name: Report an oversized pull request
-      if: steps.size.outputs.oversized == 'true'
+      if: steps.skip.outputs.skip != 'true' && steps.size.outputs.oversized == 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
@@ -152,7 +172,7 @@ runs:
         fi
 
     - name: Clear size skip notice
-      if: steps.size.outputs.oversized != 'true'
+      if: steps.skip.outputs.skip != 'true' && steps.size.outputs.oversized != 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
@@ -180,7 +200,7 @@ runs:
         done
 
     - name: Checkout pinned OpenHands extensions
-      if: steps.size.outputs.oversized != 'true'
+      if: steps.skip.outputs.skip != 'true' && steps.size.outputs.oversized != 'true'
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         repository: OpenHands/extensions
@@ -189,7 +209,7 @@ runs:
         persist-credentials: false
 
     - name: Checkout pull request repository
-      if: steps.size.outputs.oversized != 'true'
+      if: steps.skip.outputs.skip != 'true' && steps.size.outputs.oversized != 'true'
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         repository: ${{ github.event.pull_request.head.repo.full_name }}
@@ -200,7 +220,7 @@ runs:
         submodules: recursive
 
     - name: Install follow-up review guidance
-      if: steps.size.outputs.oversized != 'true'
+      if: steps.skip.outputs.skip != 'true' && steps.size.outputs.oversized != 'true'
       shell: bash
       env:
         REVIEW_GUIDANCE_PATH: ${{ inputs.review-guidance-path }}
@@ -212,7 +232,7 @@ runs:
 
     - name: Prepare persistent review memory
       id: memory
-      if: steps.size.outputs.oversized != 'true' && inputs.memory-enabled == 'true'
+      if: steps.skip.outputs.skip != 'true' && steps.size.outputs.oversized != 'true' && inputs.memory-enabled == 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
@@ -228,19 +248,19 @@ runs:
         fi
 
     - name: Set up Python
-      if: steps.size.outputs.oversized != 'true'
+      if: steps.skip.outputs.skip != 'true' && steps.size.outputs.oversized != 'true'
       uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
       with:
         python-version: '3.12'
 
     - name: Install uv
-      if: steps.size.outputs.oversized != 'true'
+      if: steps.skip.outputs.skip != 'true' && steps.size.outputs.oversized != 'true'
       uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
       with:
         enable-cache: ${{ inputs.enable-uv-cache }}
 
     - name: Validate configuration
-      if: steps.size.outputs.oversized != 'true'
+      if: steps.skip.outputs.skip != 'true' && steps.size.outputs.oversized != 'true'
       shell: bash
       env:
         LLM_API_KEY: ${{ inputs.llm-api-key }}
@@ -280,7 +300,7 @@ runs:
         fi
 
     - name: Verify review permission
-      if: steps.size.outputs.oversized != 'true'
+      if: steps.skip.outputs.skip != 'true' && steps.size.outputs.oversized != 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
@@ -315,7 +335,7 @@ runs:
         fi
 
     - name: Run agentic review
-      if: steps.size.outputs.oversized != 'true'
+      if: steps.skip.outputs.skip != 'true' && steps.size.outputs.oversized != 'true'
       shell: bash
       env:
         UV_PYTHON: '3.12'
@@ -373,7 +393,7 @@ runs:
           /tmp/review.json
 
     - name: Evaluate repository memory
-      if: steps.size.outputs.oversized != 'true' && inputs.memory-enabled == 'true' && steps.memory.outputs.issue-number != ''
+      if: steps.skip.outputs.skip != 'true' && steps.size.outputs.oversized != 'true' && inputs.memory-enabled == 'true' && steps.memory.outputs.issue-number != ''
       shell: bash
       env:
         UV_PYTHON: '3.12'
@@ -394,7 +414,7 @@ runs:
             "$MEMORY_DECISION_PATH"
 
     - name: Publish repository memory
-      if: steps.size.outputs.oversized != 'true' && inputs.memory-enabled == 'true' && steps.memory.outputs.issue-number != ''
+      if: steps.skip.outputs.skip != 'true' && steps.size.outputs.oversized != 'true' && inputs.memory-enabled == 'true' && steps.memory.outputs.issue-number != ''
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}

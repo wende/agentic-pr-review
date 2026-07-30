@@ -3,6 +3,14 @@ name: Agentic PR Review
 on:
   pull_request:
     types: [opened, reopened, ready_for_review, synchronize]
+    # Uncomment to stop reviewing pull requests that touch only these paths.
+    # A pull request touching one source file and twenty Markdown files still
+    # runs; the filter is all-or-nothing, which is the intended behaviour.
+    # A filtered-out workflow reports no status at all, so do not combine
+    # paths-ignore with a required status check.
+    # paths-ignore:
+    #   - '**/*.md'
+    #   - 'docs/**'
 
 permissions:
   contents: read
@@ -15,7 +23,9 @@ concurrency:
 
 jobs:
   review:
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      !contains(github.event.pull_request.labels.*.name, 'skip-review')
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     continue-on-error: true

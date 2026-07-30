@@ -85,6 +85,7 @@ provider.
 | `memory-enabled` | `true` | Load and update persistent repository memory |
 | `memory-issue-number` | empty | Existing memory issue; otherwise discover or create it |
 | `max-changed-lines` | `10000` | Skip and comment above this many changed lines; `0` disables |
+| `skip-label` | `skip-review` | Label that skips the review; empty disables it |
 
 ### Pinning and infrastructure
 
@@ -135,6 +136,55 @@ The default favours review depth on large diffs. If reviews are timing out
 against the example workflow's 35-minute cap, or model spend is higher than
 expected, set `use-sub-agents: 'false'` first — it is the largest single cost
 lever in this action.
+
+## Skipping reviews
+
+### By path
+
+Uncomment `paths-ignore` in the example workflow to stop reviewing pull
+requests that touch only documentation or other uninteresting files:
+
+```yaml
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+```
+
+The filter is all-or-nothing: a pull request touching one source file and
+twenty Markdown files still runs, which is the intended behaviour.
+
+A workflow filtered out this way reports no status at all, so do not combine
+`paths-ignore` with a required status check. The review is advisory today
+(`continue-on-error: true`), so this is safe as shipped.
+
+### By label
+
+Add the `skip-review` label to opt a single pull request out — a revert, a
+mechanical rename, a release commit. The example workflow checks the label at
+job level, so a labelled pull request never starts a runner.
+
+Rename the label with `skip-label`, or set it to an empty value to disable the
+check:
+
+```yaml
+- uses: wende/agentic-pr-review@v1.0.0
+  with:
+    llm-api-key: ${{ secrets.MINIMAX_API_KEY }}
+    github-token: ${{ github.token }}
+    skip-label: no-ai-review
+```
+
+The action enforces `skip-label` itself, so a custom name works with any
+workflow. Consumers using the example workflow should also update the
+hard-coded label in its job-level `if:` expression, which keeps the cheap
+never-start-a-runner path.
+
+The label is read from the event payload, so labelling an in-flight review does
+not cancel it. The next push cancels it anyway through the existing
+`cancel-in-progress` concurrency group.
 
 ## Project-specific guidance
 
