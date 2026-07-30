@@ -33,6 +33,18 @@ inputs:
     description: Hard model/tool iteration cutoff for the coordinator and each delegated agent
     required: false
     default: '60'
+  review-wrap-up-seconds:
+    description: Coordinator working seconds after which investigation stops and review publication begins
+    required: false
+    default: '1200'
+  subagent-wrap-up-iterations:
+    description: Delegated-agent iteration after which investigation stops and findings are returned
+    required: false
+    default: '25'
+  subagent-wrap-up-seconds:
+    description: Delegated-agent working seconds after which investigation stops and findings are returned
+    required: false
+    default: '600'
   load-public-skills:
     description: Load the OpenHands public skill catalog
     required: false
@@ -268,6 +280,9 @@ runs:
         LLM_MODEL: ${{ inputs.llm-model }}
         REVIEW_WRAP_UP_ITERATIONS: ${{ inputs.review-wrap-up-iterations }}
         MAX_REVIEW_ITERATIONS: ${{ inputs.max-review-iterations }}
+        REVIEW_WRAP_UP_SECONDS: ${{ inputs.review-wrap-up-seconds }}
+        SUBAGENT_WRAP_UP_ITERATIONS: ${{ inputs.subagent-wrap-up-iterations }}
+        SUBAGENT_WRAP_UP_SECONDS: ${{ inputs.subagent-wrap-up-seconds }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
       run: |
         if [[ -z "$LLM_API_KEY" ]]; then
@@ -292,6 +307,22 @@ runs:
         fi
         if [[ "$REVIEW_WRAP_UP_ITERATIONS" -ge "$MAX_REVIEW_ITERATIONS" ]]; then
           echo "::error::review-wrap-up-iterations must be less than max-review-iterations"
+          exit 1
+        fi
+        if [[ ! "$SUBAGENT_WRAP_UP_ITERATIONS" =~ ^[1-9][0-9]*$ ]]; then
+          echo "::error::subagent-wrap-up-iterations must be a positive integer"
+          exit 1
+        fi
+        if [[ ! "$REVIEW_WRAP_UP_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+          echo "::error::review-wrap-up-seconds must be a positive integer"
+          exit 1
+        fi
+        if [[ ! "$SUBAGENT_WRAP_UP_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+          echo "::error::subagent-wrap-up-seconds must be a positive integer"
+          exit 1
+        fi
+        if [[ "$SUBAGENT_WRAP_UP_SECONDS" -ge "$REVIEW_WRAP_UP_SECONDS" ]]; then
+          echo "::error::subagent-wrap-up-seconds must be less than review-wrap-up-seconds"
           exit 1
         fi
         if [[ -z "$PR_NUMBER" ]]; then
@@ -352,6 +383,9 @@ runs:
         USE_SUB_AGENTS: ${{ inputs.use-sub-agents }}
         REVIEW_WRAP_UP_ITERATIONS: ${{ inputs.review-wrap-up-iterations }}
         MAX_REVIEW_ITERATIONS: ${{ inputs.max-review-iterations }}
+        REVIEW_WRAP_UP_SECONDS: ${{ inputs.review-wrap-up-seconds }}
+        SUBAGENT_WRAP_UP_ITERATIONS: ${{ inputs.subagent-wrap-up-iterations }}
+        SUBAGENT_WRAP_UP_SECONDS: ${{ inputs.subagent-wrap-up-seconds }}
         LOAD_PUBLIC_SKILLS: ${{ inputs.load-public-skills }}
         LLM_API_KEY: ${{ inputs.llm-api-key }}
         GITHUB_TOKEN: ${{ inputs.github-token }}

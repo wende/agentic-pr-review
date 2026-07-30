@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Bound investigation by wall-clock time as well as iteration count
+  (`review-wrap-up-seconds`, default `1200`). Per-turn latency grows with
+  context size, so an iteration budget alone does not bound how long a review
+  takes.
+- Steer delegated file reviews to wrap up on their own budgets
+  (`subagent-wrap-up-iterations`, default `25`; `subagent-wrap-up-seconds`,
+  default `600`), directing them to return partial findings rather than
+  nothing. Previously only the coordinator was steered: rebinding
+  `Conversation` in the agent script's globals never reached sub-agents, which
+  the SDK builds through `TaskManager`.
+- Enable sub-agents in this repository's self-review so it exercises the
+  delegation path consumers get by default rather than the opted-out one.
+
 ## 1.1.0 - 2026-07-30
 
 - Add persistent repository review memory backed by a GitHub issue.

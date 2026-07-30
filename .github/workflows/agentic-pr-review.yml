@@ -33,5 +33,7 @@ jobs:
           llm-api-key: ${{ secrets.MINIMAX_API_KEY }}
           github-token: ${{ github.token }}
           memory-issue-number: '1'
-          use-sub-agents: 'false'
+          # Match the action's own default so the self-review exercises the
+          # delegation path consumers actually get, including sub-agent wrap-up.
+          use-sub-agents: 'true'
           load-public-skills: 'false'

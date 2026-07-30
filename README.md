@@ -78,6 +78,9 @@ provider.
 | `llm-base-url` | `https://api.minimax.io/v1` | OpenAI-compatible endpoint |
 | `use-sub-agents` | `true` | File-level delegation for large reviews — see the cost note below |
 | `review-wrap-up-iterations` | `40` | Stop investigation and steer the coordinator to publication |
+| `review-wrap-up-seconds` | `1200` | Same, whichever trips first — bounds wall time when turns are slow |
+| `subagent-wrap-up-iterations` | `25` | Stop investigation and steer a delegated review to reporting its findings |
+| `subagent-wrap-up-seconds` | `600` | Same for delegated reviews, whichever trips first |
 | `max-review-iterations` | `60` | Hard turn ceiling for the coordinator and each sub-agent |
 | `load-public-skills` | `true` | Load the OpenHands public skill catalog |
 | `require-evidence` | `false` | Require end-to-end evidence in the PR description |
@@ -274,12 +277,20 @@ Reviews starting with the legacy `<!-- macbeth-openhands-review -->` marker are
 also recognized as checkpoints, so existing PRs keep their history across the
 rename.
 
-With the defaults, after 40 coordinator iterations the runtime injects an
+With the defaults, after 40 coordinator iterations *or* 1200 seconds of
+coordinator working time — whichever comes first — the runtime injects an
 environment message that forbids further investigation and directs the agent
 to publish using its existing evidence. The remaining 20 iterations are a
 wrap-up grace period. The hard 60-iteration ceiling still bounds cost, and the
 Action fails the review step if the agent exits without posting a new marked
 review.
+
+Delegated file reviews get the same treatment on their own budgets (25
+iterations or 600 seconds), directing them to return partial findings to the
+coordinator rather than nothing. Both bounds matter because per-turn latency
+grows with context size: a fixed iteration budget can span wildly different
+wall-clock durations, so the time budget is what actually caps how long a
+review takes.
 
 ## Telemetry
 
