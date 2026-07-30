@@ -31,8 +31,18 @@ const memorySkillPath = fileURLToPath(
   new URL('../skills/repository-memory.md', import.meta.url),
 );
 const memorySkill = await readFile(memorySkillPath, 'utf8');
+const memoryEvaluatorPrompt = await readFile(
+  new URL('../skills/memory-evaluator.md', import.meta.url),
+  'utf8',
+);
 const prepareMemory = fileURLToPath(
   new URL('../scripts/prepare-memory.sh', import.meta.url),
+);
+const evaluateMemory = fileURLToPath(
+  new URL('../scripts/evaluate-memory.py', import.meta.url),
+);
+const publishMemory = fileURLToPath(
+  new URL('../scripts/publish-memory.sh', import.meta.url),
 );
 const runAgent = await readFile(
   new URL('../scripts/run-agent.py', import.meta.url),
@@ -80,7 +90,8 @@ test('review protocol budgets exploration and requires publication', () => {
   assert.match(skill, /at most 35 tool actions/);
   assert.match(skill, /Reserve the final five tool actions/);
   assert.match(skill, /review is not complete until that marked review is posted/);
-  assert.match(action, /Agent exited without posting a marked review/);
+  assert.match(action, /Agent exited without posting a new marked review/);
+  assert.match(action, /previous_marked_review_id/);
   assert.match(action, /startsWith|startswith/);
 });
 
@@ -108,17 +119,30 @@ test('persistent memory is prepared and passed to the reviewer', () => {
   assert.match(action, /memory-enabled:/);
   assert.match(action, /memory-issue-number:/);
   assert.match(action, /scripts\/prepare-memory\.sh/);
-  assert.match(action, /AGENT_MEMORY_ISSUE_NUMBER/);
   assert.match(action, /GH_TOKEN: \$\{\{ inputs\.github-token \}\}/);
 });
 
-test('memory is learned only from applied, generalizable review feedback', () => {
-  assert.match(memorySkill, /Never write memory during the first marked review/);
-  assert.match(memorySkill, /previous review comment/);
-  assert.match(memorySkill, /current HEAD demonstrably applied/);
-  assert.match(memorySkill, /how the implementation changed/);
-  assert.match(memorySkill, /Do not remember still-present or obsolete findings/);
-  assert.match(memorySkill, /Do not remember a one-off\s+fix/);
+test('memory evaluation is a separate enforced post-review phase', () => {
+  const reviewIndex = action.indexOf('- name: Run agentic review');
+  const evaluateIndex = action.indexOf('- name: Evaluate repository memory');
+  const publishIndex = action.indexOf('- name: Publish repository memory');
+  assert.ok(reviewIndex >= 0);
+  assert.ok(evaluateIndex > reviewIndex);
+  assert.ok(publishIndex > evaluateIndex);
+  assert.match(action, /scripts\/evaluate-memory\.py/);
+  assert.match(action, /scripts\/publish-memory\.sh/);
+  assert.match(action, /MEMORY_DECISION_PATH/);
+  assert.doesNotMatch(memorySkill, /## Writing memory|gh api -X POST/);
+});
+
+test('memory is learned only from applied, generalizable inline feedback', () => {
+  assert.match(memoryEvaluatorPrompt, /immediately previous marked review/);
+  assert.match(memoryEvaluatorPrompt, /changes since that review demonstrably applied/);
+  assert.match(memoryEvaluatorPrompt, /how the implementation changed/);
+  assert.match(memoryEvaluatorPrompt, /Reject still-present or obsolete findings/);
+  assert.match(memoryEvaluatorPrompt, /Reject typos/);
+  assert.match(memoryEvaluatorPrompt, /source_comment_id/);
+  assert.match(memoryEvaluatorPrompt, /no_candidate/);
 });
 
 test('guidance installer wraps plain Markdown and rejects escaping symlinks', async () => {
@@ -292,6 +316,240 @@ fi
     const outputs = await readFile(githubOutput, 'utf8');
     assert.match(installed, /No accepted memory entries/);
     assert.match(outputs, /issue-number=9/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('memory evaluator explicitly records a first-review no-candidate decision', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agentic-memory-evaluate-'));
+  const bin = join(root, 'bin');
+  const fakeGh = join(bin, 'gh');
+  const fakeGit = join(bin, 'git');
+  const decisionPath = join(root, 'decision.json');
+  const head = 'a'.repeat(40);
+  await mkdir(bin);
+  await writeFile(
+    fakeGh,
+    `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' '[[{"id":22,"commit_id":"${head}","submitted_at":"2026-07-30T10:00:00Z","body":"<!-- agentic-pr-review -->\\nFirst review.","user":{"login":"github-actions[bot]"}}]]'
+`,
+  );
+  await writeFile(
+    fakeGit,
+    `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == "rev-parse HEAD" ]]; then
+  printf '%s\\n' '${head}'
+else
+  echo "unexpected git invocation: $*" >&2
+  exit 2
+fi
+`,
+  );
+  await chmod(fakeGh, 0o755);
+  await chmod(fakeGit, 0o755);
+
+  try {
+    await execFileAsync(
+      'python3',
+      [evaluateMemory, fileURLToPath(
+        new URL('../skills/memory-evaluator.md', import.meta.url),
+      ), decisionPath],
+      {
+        env: {
+          ...process.env,
+          GH_TOKEN: 'test-token',
+          PATH: `${bin}:${process.env.PATH}`,
+          PR_NUMBER: '5',
+          REPO_NAME: 'example/repo',
+        },
+      },
+    );
+    const decision = JSON.parse(await readFile(decisionPath, 'utf8'));
+    assert.equal(decision.decision, 'no_candidate');
+    assert.equal(decision.reason, 'no_previous_review');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('memory evaluator makes one focused call and validates its candidate', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agentic-memory-model-'));
+  const bin = join(root, 'bin');
+  const fakeGh = join(bin, 'gh');
+  const fakeGit = join(bin, 'git');
+  const fakeLitellm = join(root, 'litellm.py');
+  const decisionPath = join(root, 'decision.json');
+  const previousHead = 'b'.repeat(40);
+  const currentHead = 'c'.repeat(40);
+  await mkdir(bin);
+  await writeFile(
+    fakeGh,
+    `#!/usr/bin/env bash
+set -euo pipefail
+args="$*"
+if [[ "$args" == *"/pulls/5/reviews"* ]]; then
+  printf '%s\\n' '[[{"id":22,"commit_id":"${previousHead}","submitted_at":"2026-07-30T10:00:00Z","body":"<!-- agentic-pr-review -->\\nReview.","user":{"login":"github-actions[bot]"}},{"id":23,"commit_id":"${currentHead}","submitted_at":"2026-07-30T11:00:00Z","body":"<!-- agentic-pr-review -->\\nFollow-up.","user":{"login":"github-actions[bot]"}}]]'
+elif [[ "$args" == *"/pulls/5/comments"* ]]; then
+  printf '%s\\n' '[[{"id":123,"pull_request_review_id":22,"path":"src/trust.py","line":7,"body":"Trust only an explicit automation identity.","html_url":"https://github.com/example/repo/pull/5#discussion_r123","user":{"login":"github-actions[bot]"}}]]'
+else
+  echo "unexpected gh invocation: $args" >&2
+  exit 2
+fi
+`,
+  );
+  await writeFile(
+    fakeGit,
+    `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == "rev-parse HEAD" ]]; then
+  printf '%s\\n' '${currentHead}'
+elif [[ "$1 $2" == "diff --name-only" ]]; then
+  printf '%s\\n' 'src/trust.py'
+elif [[ "$1 $2" == "diff --no-ext-diff" ]]; then
+  printf '%s\\n' 'diff --git a/src/trust.py b/src/trust.py' '-allow_every_bot = True' '+trusted_login = "github-actions[bot]"'
+else
+  echo "unexpected git invocation: $*" >&2
+  exit 2
+fi
+`,
+  );
+  await writeFile(
+    fakeLitellm,
+    `import json
+from types import SimpleNamespace
+
+def completion(**kwargs):
+    assert len(kwargs["messages"]) == 2
+    payload = json.loads(kwargs["messages"][1]["content"])
+    assert payload["previous_inline_comments"][0]["id"] == 123
+    result = {
+        "decision_version": 1,
+        "decision": "candidate",
+        "source_comment_id": 123,
+        "lesson": "Trust automation identities explicitly.",
+        "original_concern": "A broad bot-type rule trusted unrelated apps.",
+        "applied_fix": "The rule now checks the exact built-in bot login.",
+        "evidence": [{
+            "path": "src/trust.py",
+            "description": "The broad rule became an explicit identity check.",
+        }],
+    }
+    message = SimpleNamespace(content=json.dumps(result))
+    return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+`,
+  );
+  await chmod(fakeGh, 0o755);
+  await chmod(fakeGit, 0o755);
+
+  try {
+    await execFileAsync(
+      'python3',
+      [evaluateMemory, fileURLToPath(
+        new URL('../skills/memory-evaluator.md', import.meta.url),
+      ), decisionPath],
+      {
+        env: {
+          ...process.env,
+          GH_TOKEN: 'test-token',
+          LLM_API_KEY: 'model-key',
+          LLM_BASE_URL: 'https://model.example/v1',
+          LLM_MODEL: 'openai/test-model',
+          PATH: `${bin}:${process.env.PATH}`,
+          PR_NUMBER: '5',
+          PYTHONPATH: root,
+          REPO_NAME: 'example/repo',
+        },
+      },
+    );
+    const decision = JSON.parse(await readFile(decisionPath, 'utf8'));
+    assert.equal(decision.decision, 'candidate');
+    assert.equal(decision.source_comment_id, 123);
+    assert.equal(decision.evidence[0].path, 'src/trust.py');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('memory publisher validates and appends a candidate idempotency marker', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agentic-memory-publish-'));
+  const bin = join(root, 'bin');
+  const fakeGh = join(bin, 'gh');
+  const fakeGit = join(bin, 'git');
+  const decisionPath = join(root, 'decision.json');
+  const recordPath = join(root, 'published');
+  const previousHead = 'b'.repeat(40);
+  const currentHead = 'c'.repeat(40);
+  await mkdir(bin);
+  await writeFile(
+    decisionPath,
+    JSON.stringify({
+      decision_version: 1,
+      decision: 'candidate',
+      source_comment_id: 123,
+      lesson: 'Trust automation identities explicitly.',
+      original_concern: 'Every bot identity was accepted.',
+      applied_fix: 'The loader now allows only the built-in review bot.',
+      evidence: [{
+        path: 'scripts/prepare-memory.sh',
+        description: 'The broad bot-type check became an explicit login check.',
+      }],
+    }),
+  );
+  await writeFile(
+    fakeGh,
+    `#!/usr/bin/env bash
+set -euo pipefail
+args="$*"
+if [[ "$args" == *"/pulls/5/reviews"* ]]; then
+  printf '%s\\n' '[[{"id":22,"commit_id":"${previousHead}","submitted_at":"2026-07-30T10:00:00Z","body":"<!-- agentic-pr-review -->\\nReview.","user":{"login":"github-actions[bot]"}},{"id":23,"commit_id":"${currentHead}","submitted_at":"2026-07-30T11:00:00Z","body":"<!-- agentic-pr-review -->\\nFollow-up.","user":{"login":"github-actions[bot]"}}]]'
+elif [[ "$args" == *"/pulls/comments/123"* ]]; then
+  printf '%s\\n' '{"id":123,"pull_request_review_id":22,"pull_request_url":"https://api.github.com/repos/example/repo/pulls/5","html_url":"https://github.com/example/repo/pull/5#discussion_r123","path":"scripts/prepare-memory.sh","user":{"login":"github-actions[bot]"}}'
+elif [[ "$args" == *"/issues/7/comments"* && "$args" != *"-X POST"* ]]; then
+  printf '%s\\n' '[[]]'
+elif [[ "$args" == *"-X POST"* && "$args" == *"/issues/7/comments"* ]]; then
+  printf '%s\\n' "$args" >"$RECORD_PATH"
+  printf '%s\\n' '{}'
+else
+  echo "unexpected gh invocation: $args" >&2
+  exit 2
+fi
+`,
+  );
+  await writeFile(
+    fakeGit,
+    `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1 $2" == "diff --name-only" ]]; then
+  printf 'scripts/prepare-memory.sh\\0'
+else
+  echo "unexpected git invocation: $*" >&2
+  exit 2
+fi
+`,
+  );
+  await chmod(fakeGh, 0o755);
+  await chmod(fakeGit, 0o755);
+
+  try {
+    await execFileAsync(
+      publishMemory,
+      [decisionPath, 'example/repo', '5', '7', currentHead],
+      {
+        env: {
+          ...process.env,
+          GH_TOKEN: 'test-token',
+          PATH: `${bin}:${process.env.PATH}`,
+          RECORD_PATH: recordPath,
+        },
+      },
+    );
+    const published = await readFile(recordPath, 'utf8');
+    assert.match(published, /agentic-pr-review-memory-entry/);
+    assert.match(published, /agentic-pr-review-source-comment:123/);
+    assert.match(published, /Trust automation identities explicitly/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

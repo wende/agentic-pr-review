@@ -124,12 +124,21 @@ posting a marked review for the current commit.
 
 By default, the action discovers or creates an issue named
 `[agentic-pr-review] Repository memory`. The issue body is only a storage marker;
-the versioned Action skill is the single source of truth for memory behavior.
+the versioned Action files are the source of truth for memory behavior.
 Before each review, the action loads up to 100 accepted, marked comments as a
-`/codereview` skill. The reviewer never writes memory on the first review. On a
-later review, it may append one new comment only when it verifies that feedback
-from its previous review was applied in the new code and the resulting lesson
-generalizes beyond that one fix into a durable code-quality or design principle.
+`/codereview` skill. The main reviewer only consumes memory; it cannot update
+the issue. After a marked review is published, a separate focused model call
+compares inline comments from the immediately previous marked review with the
+changes made since that checkpoint. It must produce a structured candidate or
+an explicit no-candidate decision.
+
+A deterministic publication step validates that a candidate references an
+inline comment belonging to the previous marked review and that its evidence
+paths changed since that review. It then appends at most one memory comment.
+Missing or malformed decisions fail visibly instead of silently skipping
+memory. This adds exactly one focused model call when a follow-up has inline
+comments to evaluate. First reviews and follow-ups without previous inline
+comments need no model call; no-candidate decisions leave the issue unchanged.
 
 Memory comments are append-only to avoid lost updates when different pull
 requests are reviewed concurrently. The loader ignores unmarked comments and
@@ -139,6 +148,7 @@ never sufficient evidence for a memory update. Still-present findings,
 obsolete findings, resolved-thread metadata, and one-off fixes are not stored.
 Each accepted entry records the original review concern, how the implementation
 fixed it, the generalized lesson, and links or paths supporting that conclusion.
+Entries are idempotent by source review-comment ID.
 
 The consumer workflow must grant `issues: write`; the example already does.
 For deterministic setup, create the memory issue once and pass its number:

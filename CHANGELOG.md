@@ -3,6 +3,8 @@
 ## Unreleased
 
 - Add persistent repository review memory backed by a GitHub issue.
+- Evaluate memory in a separate post-review model phase and publish only
+  validated structured decisions.
 - Add a self-review workflow using the repository's memory issue.
 - Supply MiniMax prices to telemetry without changing its OpenAI-compatible request path.
 - Bound the coordinator and each delegated reviewer to 40 iterations by default.

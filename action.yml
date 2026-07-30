@@ -206,9 +206,6 @@ runs:
         GITHUB_TOKEN: ${{ inputs.github-token }}
         GH_TOKEN: ${{ inputs.github-token }}
         LMNR_PROJECT_API_KEY: ${{ inputs.lmnr-api-key }}
-        AGENT_MEMORY_ISSUE_NUMBER: ${{ steps.memory.outputs.issue-number }}
-        AGENT_MEMORY_ISSUE_URL: ${{ steps.memory.outputs.issue-url }}
-        AGENT_MEMORY_REPOSITORY: ${{ github.repository }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
         PR_TITLE: ${{ github.event.pull_request.title }}
         PR_BODY: ${{ github.event.pull_request.body }}
@@ -217,15 +214,8 @@ runs:
         REPO_NAME: ${{ github.repository }}
       run: |
         cd agentic-review-repo
-        uv run --no-project \
-          --with "$OPENHANDS_SDK_PACKAGE" \
-          --with "$OPENHANDS_TOOLS_PACKAGE" \
-          --with "$LMNR_PACKAGE" \
-          python "$GITHUB_ACTION_PATH/scripts/run-agent.py" \
-            ../agentic-review-extensions/plugins/pr-review/scripts/agent_script.py
-
         head_commit="$(git rev-parse HEAD)"
-        marked_reviews="$(
+        previous_marked_review_id="$(
           gh api --paginate --slurp \
             "repos/${REPO_NAME}/pulls/${PR_NUMBER}/reviews?per_page=100" |
             jq --arg sha "$head_commit" '
@@ -234,13 +224,73 @@ runs:
                   .commit_id == $sha and
                   ((.body // "") | startswith("<!-- agentic-pr-review -->"))
                 ))
-              | length
+              | map(.id)
+              | max // 0
             '
         )"
-        if [[ "$marked_reviews" -lt 1 ]]; then
-          echo "::error::Agent exited without posting a marked review for $head_commit"
+        uv run --no-project \
+          --with "$OPENHANDS_SDK_PACKAGE" \
+          --with "$OPENHANDS_TOOLS_PACKAGE" \
+          --with "$LMNR_PACKAGE" \
+          python "$GITHUB_ACTION_PATH/scripts/run-agent.py" \
+            ../agentic-review-extensions/plugins/pr-review/scripts/agent_script.py
+
+        current_marked_review_id="$(
+          gh api --paginate --slurp \
+            "repos/${REPO_NAME}/pulls/${PR_NUMBER}/reviews?per_page=100" |
+            jq --arg sha "$head_commit" '
+              (if length > 0 and (.[0] | type) == "array" then add else . end)
+              | map(select(
+                  .commit_id == $sha and
+                  ((.body // "") | startswith("<!-- agentic-pr-review -->"))
+                ))
+              | map(.id)
+              | max // 0
+            '
+        )"
+        if [[ "$current_marked_review_id" -le "$previous_marked_review_id" ]]; then
+          echo "::error::Agent exited without posting a new marked review for $head_commit"
           exit 1
         fi
+
+    - name: Evaluate repository memory
+      if: inputs.memory-enabled == 'true' && steps.memory.outputs.issue-number != ''
+      shell: bash
+      env:
+        UV_PYTHON: '3.12'
+        OPENHANDS_SDK_PACKAGE: ${{ inputs.openhands-sdk-package }}
+        LLM_MODEL: ${{ inputs.llm-model }}
+        LLM_BASE_URL: ${{ inputs.llm-base-url }}
+        LLM_API_KEY: ${{ inputs.llm-api-key }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        REPO_NAME: ${{ github.repository }}
+        MEMORY_DECISION_PATH: ${{ runner.temp }}/agentic-review-memory-${{ github.run_id }}-${{ github.run_attempt }}.json
+      run: |
+        cd agentic-review-repo
+        uv run --no-project \
+          --with "$OPENHANDS_SDK_PACKAGE" \
+          python "$GITHUB_ACTION_PATH/scripts/evaluate-memory.py" \
+            "$GITHUB_ACTION_PATH/skills/memory-evaluator.md" \
+            "$MEMORY_DECISION_PATH"
+
+    - name: Publish repository memory
+      if: inputs.memory-enabled == 'true' && steps.memory.outputs.issue-number != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        REPO_NAME: ${{ github.repository }}
+        MEMORY_ISSUE_NUMBER: ${{ steps.memory.outputs.issue-number }}
+        MEMORY_DECISION_PATH: ${{ runner.temp }}/agentic-review-memory-${{ github.run_id }}-${{ github.run_attempt }}.json
+      run: |
+        cd agentic-review-repo
+        "$GITHUB_ACTION_PATH/scripts/publish-memory.sh" \
+          "$MEMORY_DECISION_PATH" \
+          "$REPO_NAME" \
+          "$PR_NUMBER" \
+          "$MEMORY_ISSUE_NUMBER" \
+          "$(git rev-parse HEAD)"
 
     - name: Upload review logs
       if: always()
