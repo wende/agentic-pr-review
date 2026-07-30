@@ -270,6 +270,9 @@ test('follow-up reviews use a stable marker and explicit classifications', () =>
   assert.match(skill, /\*\*still present\*\*/);
   assert.match(skill, /\*\*obsolete\*\*/);
   assert.match(skill, /Do not post a duplicate inline comment/);
+  // Classification vocabulary is two words, not hyphenated.
+  assert.doesNotMatch(skill, /still-present/);
+  assert.doesNotMatch(memoryEvaluatorPrompt, /still-present/);
 });
 
 test('follow-up protocol defers to the code review layout', () => {
@@ -432,7 +435,7 @@ test('memory is learned only from applied, generalizable inline feedback', () =>
   assert.match(memoryEvaluatorPrompt, /immediately previous marked review/);
   assert.match(memoryEvaluatorPrompt, /changes since that review demonstrably applied/);
   assert.match(memoryEvaluatorPrompt, /how the implementation changed/);
-  assert.match(memoryEvaluatorPrompt, /Reject still-present or obsolete findings/);
+  assert.match(memoryEvaluatorPrompt, /Reject still present or obsolete findings/);
   assert.match(memoryEvaluatorPrompt, /Reject typos/);
   assert.match(memoryEvaluatorPrompt, /source_comment_id/);
   assert.match(memoryEvaluatorPrompt, /no_candidate/);
@@ -821,6 +824,77 @@ def completion(**kwargs):
     assert.equal(decision.decision, 'candidate');
     assert.equal(decision.source_comment_id, 123);
     assert.equal(decision.evidence[0].path, 'src/trust.py');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('memory evaluator skips when a previous review commit is unavailable', async () => {
+  // Force-push rewrites leave the prior review's commit_id on GitHub while the
+  // checkout only has the new history; git diff exits 128. That must yield a
+  // no-candidate decision rather than failing the job after a successful review.
+  const root = await mkdtemp(join(tmpdir(), 'agentic-memory-orphan-'));
+  const bin = join(root, 'bin');
+  const fakeGh = join(bin, 'gh');
+  const fakeGit = join(bin, 'git');
+  const decisionPath = join(root, 'decision.json');
+  const previousHead = 'b'.repeat(40);
+  const currentHead = 'c'.repeat(40);
+  await mkdir(bin);
+  await writeFile(
+    fakeGh,
+    `#!/usr/bin/env bash
+set -euo pipefail
+args="$*"
+if [[ "$args" == *"/pulls/5/reviews"* ]]; then
+  printf '%s\\n' '[[{"id":22,"commit_id":"${previousHead}","submitted_at":"2026-07-30T10:00:00Z","body":"<!-- agentic-pr-review -->\\nReview.","user":{"login":"github-actions[bot]"}},{"id":23,"commit_id":"${currentHead}","submitted_at":"2026-07-30T11:00:00Z","body":"<!-- agentic-pr-review -->\\nFollow-up.","user":{"login":"github-actions[bot]"}}]]'
+elif [[ "$args" == *"/pulls/5/comments"* ]]; then
+  printf '%s\\n' '[[{"id":123,"pull_request_review_id":22,"path":"src/trust.py","line":7,"body":"Trust only an explicit automation identity.","html_url":"https://github.com/example/repo/pull/5#discussion_r123","user":{"login":"github-actions[bot]"}}]]'
+else
+  echo "unexpected gh invocation: $args" >&2
+  exit 2
+fi
+`,
+  );
+  await writeFile(
+    fakeGit,
+    `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == "rev-parse HEAD" ]]; then
+  printf '%s\\n' '${currentHead}'
+elif [[ "$1" == "diff" ]]; then
+  # Match real git when either commit is missing after a force-push.
+  echo "fatal: bad object ${previousHead}" >&2
+  exit 128
+else
+  echo "unexpected git invocation: $*" >&2
+  exit 2
+fi
+`,
+  );
+  await chmod(fakeGh, 0o755);
+  await chmod(fakeGit, 0o755);
+
+  try {
+    await execFileAsync(
+      'python3',
+      [evaluateMemory, fileURLToPath(
+        new URL('../skills/memory-evaluator.md', import.meta.url),
+      ), decisionPath],
+      {
+        env: {
+          ...process.env,
+          GH_TOKEN: 'test-token',
+          PATH: `${bin}:${process.env.PATH}`,
+          PR_NUMBER: '5',
+          REPO_NAME: 'example/repo',
+        },
+      },
+    );
+    const decision = JSON.parse(await readFile(decisionPath, 'utf8'));
+    assert.equal(decision.decision, 'no_candidate');
+    assert.equal(decision.reason, 'previous_commit_unavailable');
+    assert.match(decision.details, /force-push|rewritten/i);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

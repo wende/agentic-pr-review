@@ -41,7 +41,7 @@ previous review had no actionable findings. Report the findings themselves in
 the sections that layout already provides; do not add a separate list for them.
 On the first marked review, say so briefly and omit the classification.
 
-Do not post a duplicate inline comment for an unchanged, still-present finding;
+Do not post a duplicate inline comment for an unchanged, still present finding;
 reference it in the follow-up summary. Post inline comments for new findings,
 materially changed failure modes, or incomplete fixes that need new evidence.
 Read other reviewers' comments too and do not duplicate still-relevant findings.

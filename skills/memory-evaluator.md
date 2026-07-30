@@ -21,7 +21,7 @@ Choose `"decision": "candidate"` only when every condition is satisfied:
 4. The lesson generalizes to future reviews in this repository as a durable
    code-quality, architecture, security, reliability, or design principle.
 
-Reject still-present or obsolete findings. Reject typos, uniquely local edge
+Reject still present or obsolete findings. Reject typos, uniquely local edge
 cases, PR-specific implementation choices, and mechanical corrections without
 a reusable lesson. Select at most one candidate.
 

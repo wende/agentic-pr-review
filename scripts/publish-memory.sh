@@ -37,6 +37,7 @@ if [[ "$decision" == "no_candidate" ]]; then
     (
       .reason == "no_previous_review" or
       .reason == "no_previous_inline_comments" or
+      .reason == "previous_commit_unavailable" or
       .reason == "no_applied_feedback" or
       .reason == "no_generalizable_lesson"
     ) and

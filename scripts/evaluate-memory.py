@@ -311,27 +311,44 @@ def main() -> None:
         return
 
     previous_commit = str(previous_review["commit_id"])
-    changed_paths = {
-        path
-        for path in command(
+    # Force-pushes leave prior review commit_ids orphaned in GitHub but absent
+    # from the shallow checkout; git diff then exits 128. Skip evaluation rather
+    # than failing the job — there is no reliable path set to verify applied fixes.
+    try:
+        changed_paths = {
+            path
+            for path in command(
+                "git",
+                "diff",
+                "--name-only",
+                previous_commit,
+                head_commit,
+                "--",
+            ).splitlines()
+            if path
+        }
+        diff = command(
             "git",
             "diff",
-            "--name-only",
+            "--no-ext-diff",
+            "--unified=40",
             previous_commit,
             head_commit,
             "--",
-        ).splitlines()
-        if path
-    }
-    diff = command(
-        "git",
-        "diff",
-        "--no-ext-diff",
-        "--unified=40",
-        previous_commit,
-        head_commit,
-        "--",
-    )
+        )
+    except subprocess.CalledProcessError as error:
+        if error.returncode != 128:
+            raise
+        write_decision(
+            decision_path,
+            no_candidate(
+                "previous_commit_unavailable",
+                "A review checkpoint commit is not in the local repository "
+                "(history was rewritten, e.g. by force-push); cannot verify "
+                "applied fixes against the previous review.",
+            ),
+        )
+        return
     if len(diff) > MAX_DIFF_CHARS:
         diff = (
             diff[:MAX_DIFF_CHARS]

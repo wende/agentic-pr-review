@@ -18,6 +18,9 @@
   exceed `max-changed-lines` (default `10000`; `0` disables). The check runs
   before the checkouts. The notice is edited in place while oversized, and
   deleted when the PR later drops under the limit.
+- Memory evaluation records `previous_commit_unavailable` instead of failing
+  when a prior review commit is missing after a force-push.
+- Standardize follow-up vocabulary on `still present` (two words, no hyphen).
 
 - Stop passing `REVIEW_STYLE`, `ACP_COMMAND`, and `ACP_PROMPT_TIMEOUT`; the
   pinned agent ignores all three under `AGENT_KIND: openhands`.
