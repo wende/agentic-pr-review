@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the pinned review agent with cost metadata for adapter-backed models."""
+"""Run the pinned review agent with bounded turns and telemetry-only pricing."""
 
 from __future__ import annotations
 
@@ -9,45 +9,47 @@ import sys
 from pathlib import Path
 
 import litellm
+import openhands.sdk
 
 
 MODEL_COST_ALIASES = {
-    # Keep the generic OpenAI-compatible request path while reusing LiteLLM's
-    # native MiniMax pricing entry for telemetry.
+    # Reuse the canonical cost fields without registering the adapter model in
+    # LiteLLM, which would alter provider/model capability detection.
     "openai/MiniMax-M3": "minimax/MiniMax-M3",
 }
 
-COST_FIELDS = {
-    "cache_creation_input_token_cost",
-    "cache_read_input_token_cost",
-    "cache_read_input_token_cost_above_512k_tokens",
-    "input_cost_per_token",
-    "input_cost_per_token_above_512k_tokens",
-    "output_cost_per_token",
-    "output_cost_per_token_above_512k_tokens",
-}
-
-
-def register_cost_alias(model: str) -> None:
+def configure_sdk(model: str, max_iterations: int) -> None:
     canonical_model = MODEL_COST_ALIASES.get(model)
-    if canonical_model is None:
-        return
+    canonical_info = (
+        litellm.model_cost.get(canonical_model)
+        if canonical_model is not None
+        else None
+    )
+    if canonical_model is not None and canonical_info is None:
+        raise RuntimeError(f"LiteLLM has no pricing metadata for {canonical_model}")
 
-    canonical_info = litellm.model_cost.get(canonical_model)
-    if canonical_info is None:
-        raise RuntimeError(
-            f"LiteLLM has no pricing metadata for {canonical_model}"
-        )
+    original_llm = openhands.sdk.LLM
+    original_conversation = openhands.sdk.Conversation
 
-    model_info = {
-        field: canonical_info[field]
-        for field in COST_FIELDS
-        if field in canonical_info
-    }
-    model_info.setdefault("cache_creation_input_token_cost", 0)
-    model_info["litellm_provider"] = model.split("/", 1)[0]
-    model_info["mode"] = "chat"
-    litellm.register_model(model_cost={model: model_info})
+    def telemetry_priced_llm(*args: object, **kwargs: object) -> object:
+        configured_model = kwargs.get("model")
+        if configured_model == model and canonical_info is not None:
+            kwargs.setdefault(
+                "input_cost_per_token",
+                canonical_info["input_cost_per_token"],
+            )
+            kwargs.setdefault(
+                "output_cost_per_token",
+                canonical_info["output_cost_per_token"],
+            )
+        return original_llm(*args, **kwargs)
+
+    def bounded_conversation(*args: object, **kwargs: object) -> object:
+        kwargs.setdefault("max_iteration_per_run", max_iterations)
+        return original_conversation(*args, **kwargs)
+
+    openhands.sdk.LLM = telemetry_priced_llm
+    openhands.sdk.Conversation = bounded_conversation
 
 
 def main() -> None:
@@ -58,7 +60,14 @@ def main() -> None:
     if not agent_script.is_file():
         raise SystemExit(f"review agent script not found: {agent_script}")
 
-    register_cost_alias(os.environ.get("LLM_MODEL", ""))
+    try:
+        max_iterations = int(os.environ.get("MAX_REVIEW_ITERATIONS", "50"))
+    except ValueError as error:
+        raise SystemExit("MAX_REVIEW_ITERATIONS must be a positive integer") from error
+    if max_iterations < 1:
+        raise SystemExit("MAX_REVIEW_ITERATIONS must be a positive integer")
+
+    configure_sdk(os.environ.get("LLM_MODEL", ""), max_iterations)
     runpy.run_path(str(agent_script), run_name="__main__")
 
 

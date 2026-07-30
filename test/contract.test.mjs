@@ -55,12 +55,21 @@ test('action pins upstream code and matching OpenHands packages', () => {
   assert.match(action, /enable-cache: \$\{\{ inputs\.enable-uv-cache \}\}/);
 });
 
-test('MiniMax keeps its adapter behavior while registering cost metadata', () => {
+test('MiniMax keeps its adapter behavior while supplying telemetry prices', () => {
   assert.match(action, /default: openai\/MiniMax-M3/);
   assert.match(action, /scripts\/run-agent\.py/);
   assert.match(runAgent, /"openai\/MiniMax-M3": "minimax\/MiniMax-M3"/);
-  assert.match(runAgent, /litellm\.register_model/);
-  assert.doesNotMatch(runAgent, /supports_function_calling|supports_reasoning/);
+  assert.match(runAgent, /input_cost_per_token/);
+  assert.match(runAgent, /output_cost_per_token/);
+  assert.doesNotMatch(runAgent, /litellm\.register_model/);
+});
+
+test('coordinator and delegated reviews have an iteration ceiling', () => {
+  assert.match(action, /max-review-iterations:/);
+  assert.match(action, /default: '50'/);
+  assert.match(action, /MAX_REVIEW_ITERATIONS/);
+  assert.match(runAgent, /max_iteration_per_run/);
+  assert.match(selfReview, /use-sub-agents: 'false'/);
 });
 
 test('follow-up reviews use a stable marker and explicit classifications', () => {

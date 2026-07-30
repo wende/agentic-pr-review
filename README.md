@@ -95,9 +95,10 @@ The default model is `openai/MiniMax-M3` at
 LiteLLM-compatible provider.
 
 The default intentionally uses MiniMax's OpenAI-compatible request path. Before
-the reviewer starts, the Action registers the native `minimax/MiniMax-M3` cost
-fields under that adapter model name. This provides accurate cost telemetry
-without changing the model's request or tool-use behavior.
+the reviewer starts, the Action gives OpenHands the native
+`minimax/MiniMax-M3` input and output prices for telemetry only. It does not
+register or reroute the adapter model in LiteLLM, so request and tool-use
+behavior stay unchanged.
 
 Important inputs:
 
@@ -106,6 +107,7 @@ Important inputs:
 | `llm-model` | `openai/MiniMax-M3` | LiteLLM model identifier |
 | `llm-base-url` | MiniMax API | OpenAI-compatible endpoint |
 | `use-sub-agents` | `true` | File-level delegation for large reviews |
+| `max-review-iterations` | `50` | Turn ceiling for the coordinator and each sub-agent |
 | `load-public-skills` | `true` | OpenHands public skill catalog |
 | `require-evidence` | `false` | Require end-to-end PR evidence |
 | `review-guidance-path` | empty | Plain Markdown review rules from the consumer |

@@ -4,7 +4,8 @@
 
 - Add persistent repository review memory backed by a GitHub issue.
 - Add a self-review workflow using the repository's memory issue.
-- Register MiniMax pricing metadata without changing its OpenAI-compatible request path.
+- Supply MiniMax prices to telemetry without changing its OpenAI-compatible request path.
+- Bound the coordinator and each delegated reviewer to 50 iterations by default.
 - Remove the unused reaction-based review feedback footer.
 
 ## 1.0.0 - 2026-07-30

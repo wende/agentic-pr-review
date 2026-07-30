@@ -25,6 +25,10 @@ inputs:
     description: Allow the reviewer to delegate large diffs to file-level agents
     required: false
     default: 'true'
+  max-review-iterations:
+    description: Maximum model/tool iterations for the coordinator and each delegated agent
+    required: false
+    default: '50'
   load-public-skills:
     description: Load the OpenHands public skill catalog
     required: false
@@ -134,6 +138,7 @@ runs:
         LLM_API_KEY: ${{ inputs.llm-api-key }}
         GITHUB_TOKEN: ${{ inputs.github-token }}
         LLM_MODEL: ${{ inputs.llm-model }}
+        MAX_REVIEW_ITERATIONS: ${{ inputs.max-review-iterations }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
       run: |
         if [[ -z "$LLM_API_KEY" ]]; then
@@ -146,6 +151,10 @@ runs:
         fi
         if [[ -z "$LLM_MODEL" ]]; then
           echo "::error::llm-model is required"
+          exit 1
+        fi
+        if [[ ! "$MAX_REVIEW_ITERATIONS" =~ ^[1-9][0-9]*$ ]]; then
+          echo "::error::max-review-iterations must be a positive integer"
           exit 1
         fi
         if [[ -z "$PR_NUMBER" ]]; then
@@ -191,6 +200,7 @@ runs:
         REVIEW_STYLE: roasted
         REQUIRE_EVIDENCE: ${{ inputs.require-evidence }}
         USE_SUB_AGENTS: ${{ inputs.use-sub-agents }}
+        MAX_REVIEW_ITERATIONS: ${{ inputs.max-review-iterations }}
         LOAD_PUBLIC_SKILLS: ${{ inputs.load-public-skills }}
         LLM_API_KEY: ${{ inputs.llm-api-key }}
         GITHUB_TOKEN: ${{ inputs.github-token }}
