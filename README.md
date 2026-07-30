@@ -1,7 +1,7 @@
 # Agentic PR Review
 
-Versioned, automatic pull request review powered by OpenHands and any
-OpenAI-compatible model endpoint.
+Versioned, automatic pull request review powered by [OpenHands](https://github.com/OpenHands/extensions)
+and any OpenAI-compatible model endpoint.
 
 The reviewer receives the complete PR manifest and patches, checks out the full
 repository, can inspect files and run read-only commands, reads previous reviews
@@ -10,6 +10,27 @@ and threads, and can delegate large diffs to file-level sub-agents.
 On every rerun it identifies its latest completed review, verifies earlier
 findings against the current HEAD, summarizes what was resolved or remains, and
 adds inline comments only for new or materially changed findings.
+
+## What the action does
+
+The action is a composite action. Each run, in order:
+
+1. Checks out `OpenHands/extensions` at the pinned `extensions-version` commit.
+2. Checks out the PR head repository at full depth, with submodules and without
+   persisting credentials.
+3. Installs the versioned follow-up protocol — and, optionally, the consumer's
+   own guidance file — into `.agents/skills/` of that checkout
+   ([`scripts/install-guidance.sh`](scripts/install-guidance.sh)).
+4. Sets up Python 3.12 and [uv](https://github.com/astral-sh/uv).
+5. Validates that `llm-api-key`, `github-token`, `llm-model`, and a
+   `pull_request` event context are all present.
+6. Verifies the token can actually submit reviews by creating and immediately
+   deleting a pending review — so a permissions problem fails fast rather than
+   after a full model run.
+7. Runs the pinned OpenHands PR-review agent script.
+
+Agent progress and the cost summary go to the job log; the action uploads no
+artifacts.
 
 ## Install
 
@@ -30,8 +51,66 @@ The example automatically reviews:
 - the transition from draft to ready for review.
 
 It skips fork PRs because the safe `pull_request` event does not expose
-repository secrets to forked code. Reviews are advisory and cannot block a PR
-when a model provider or third-party service is unavailable.
+repository secrets to forked code. Reviews are advisory (`continue-on-error:
+true`) and cannot block a PR when a model provider or third-party service is
+unavailable.
+
+## Configuration
+
+The default model is `openai/MiniMax-M3` at `https://api.minimax.io/v1`.
+Override `llm-model` and `llm-base-url` for any other LiteLLM-compatible
+provider.
+
+### Required inputs
+
+| Input | Purpose |
+| --- | --- |
+| `llm-api-key` | Model API key |
+| `github-token` | Token used to read PR context and submit reviews |
+
+### Review behaviour
+
+| Input | Default | Purpose |
+| --- | --- | --- |
+| `llm-model` | `openai/MiniMax-M3` | LiteLLM model identifier (single model; comma-separated A/B lists are not supported) |
+| `llm-base-url` | `https://api.minimax.io/v1` | OpenAI-compatible endpoint |
+| `use-sub-agents` | `true` | File-level delegation for large reviews — see the cost note below |
+| `review-wrap-up-iterations` | `40` | Stop investigation and steer the coordinator to publication |
+| `max-review-iterations` | `60` | Hard turn ceiling for the coordinator and each sub-agent |
+| `load-public-skills` | `true` | Load the OpenHands public skill catalog |
+| `require-evidence` | `false` | Require end-to-end evidence in the PR description |
+| `review-guidance-path` | empty | Plain Markdown review rules from the consumer repository |
+| `memory-enabled` | `true` | Load and update persistent repository memory |
+| `memory-issue-number` | empty | Existing memory issue; otherwise discover or create it |
+
+### Pinning and infrastructure
+
+| Input | Default | Purpose |
+| --- | --- | --- |
+| `extensions-version` | `9def413…baea45` | Pinned `OpenHands/extensions` commit |
+| `openhands-sdk-package` | `openhands-sdk==1.39.0` | Pinned SDK package spec |
+| `openhands-tools-package` | `openhands-tools==1.39.0` | Pinned tools package spec |
+| `lmnr-package` | `lmnr==0.7.57` | Pinned Laminar client spec; required by an upstream import, no telemetry sent |
+| `enable-uv-cache` | `false` | Shared dependency cache; disabled for security |
+
+The SDK and tools package versions must be kept in step with each other and with
+`extensions-version`; [`test/contract.test.mjs`](test/contract.test.mjs) asserts
+the pinned values so an unreviewed bump fails CI.
+
+The action declares no outputs. Consume the result through the review GitHub
+posts on the PR.
+
+### Sub-agent cost
+
+`use-sub-agents` defaults to `true` here, which diverges from upstream
+OpenHands: they default it to `false` because file-level delegation carries
+high token cost and can push long reviews past the job timeout
+([extensions#208](https://github.com/OpenHands/extensions/issues/208)).
+
+The default favours review depth on large diffs. If reviews are timing out
+against the example workflow's 35-minute cap, or model spend is higher than
+expected, set `use-sub-agents: 'false'` first — it is the largest single cost
+lever in this action.
 
 ## Project-specific guidance
 
@@ -57,8 +136,9 @@ triggers:
 - Trace cancellation, timeout, and cleanup paths.
 ```
 
-The action injects its versioned follow-up protocol alongside these local
-project rules.
+The action injects its versioned follow-up protocol
+([`skills/follow-up-review.md`](skills/follow-up-review.md)) alongside these
+local project rules.
 
 ### Plain best-practices file
 
@@ -73,8 +153,16 @@ frontmatter. Point the action at it:
     review-guidance-path: .github/review-best-practices.md
 ```
 
-The action validates that the path stays inside the checked-out consumer
-repository and wraps the file as a `/codereview` skill for that run.
+The path must be repository-relative; absolute paths, `..` segments, and
+symlinks that resolve outside the checkout are rejected. The file is normalized
+(CRLF stripped) and wrapped as a `/codereview` skill named
+`repository-review-best-practices` for that run.
+
+Reserved skill filenames the action writes into the checkout — do not commit
+your own files under these names:
+
+- `.agents/skills/agentic-review-follow-up.md`
+- `.agents/skills/repository-review-best-practices.md`
 
 ### Public and specific skills
 
@@ -88,11 +176,11 @@ directly; no package installation or network fetch is required. Skills using the
 `/codereview` trigger are active for every review. Other triggers are activated
 when their keywords appear in the review task.
 
-## Configuration
+## Reviewer identity
 
-The default model is `openai/MiniMax-M3` at
-`https://api.minimax.io/v1`. Override `llm-model` and `llm-base-url` for another
-LiteLLM-compatible provider.
+With `secrets.GITHUB_TOKEN`, reviews appear from `github-actions[bot]`. Pass a
+GitHub App installation token as `github-token` to use a dedicated reviewer name
+and avatar.
 
 The default intentionally uses MiniMax's OpenAI-compatible request path. Before
 the reviewer starts, the Action gives OpenHands the native
@@ -100,21 +188,15 @@ the reviewer starts, the Action gives OpenHands the native
 register or reroute the adapter model in LiteLLM, so request and tool-use
 behavior stay unchanged.
 
-Important inputs:
+The follow-up protocol keys off a hidden marker at the top of every review body:
 
-| Input | Default | Purpose |
-| --- | --- | --- |
-| `llm-model` | `openai/MiniMax-M3` | LiteLLM model identifier |
-| `llm-base-url` | MiniMax API | OpenAI-compatible endpoint |
-| `use-sub-agents` | `true` | File-level delegation for large reviews |
-| `review-wrap-up-iterations` | `40` | Stop investigation and steer the coordinator to publication |
-| `max-review-iterations` | `60` | Hard turn ceiling for the coordinator and each sub-agent |
-| `load-public-skills` | `true` | OpenHands public skill catalog |
-| `require-evidence` | `false` | Require end-to-end PR evidence |
-| `review-guidance-path` | empty | Plain Markdown review rules from the consumer |
-| `memory-enabled` | `true` | Load and update persistent repository memory |
-| `memory-issue-number` | empty | Existing memory issue; otherwise discover or create it |
-| `enable-uv-cache` | `false` | Shared dependency cache; disabled for security |
+```html
+<!-- agentic-pr-review -->
+```
+
+Reviews starting with the legacy `<!-- macbeth-openhands-review -->` marker are
+also recognized as checkpoints, so existing PRs keep their history across the
+rename.
 
 With the defaults, after 40 coordinator iterations the runtime injects an
 environment message that forbids further investigation and directs the agent
@@ -122,6 +204,18 @@ to publish using its existing evidence. The remaining 20 iterations are a
 wrap-up grace period. The hard 60-iteration ceiling still bounds cost, and the
 Action fails the review step if the agent exits without posting a new marked
 review.
+
+## Telemetry
+
+This action sends no telemetry. Upstream OpenHands supports
+[Laminar](https://www.lmnr.ai/) tracing; this action deliberately plumbs no key
+through, so the agent's trace export is inert and it writes no trace file.
+
+The `lmnr` package is still installed and pinned only because the pinned agent
+script imports it at module scope — removing it breaks the review before it
+starts. If that import ever becomes optional upstream, drop `lmnr-package` too.
+
+Review progress and the per-run cost summary go to the GitHub Actions job log.
 
 ## Persistent repository memory
 
@@ -173,25 +267,39 @@ reproducibility. Major compatibility tags such as `v1` may move to newer
 backward-compatible releases.
 
 The action pins OpenHands extensions, SDK/tools packages, and nested GitHub
-Actions. Dependabot proposes dependency upgrades for review and testing before a
-release.
-
-## Reviewer identity
-
-With `github.token`, reviews appear from `github-actions[bot]`. Pass a
-GitHub App installation token as `github-token` to use a dedicated reviewer name
-and avatar.
+Actions by commit SHA. Dependabot proposes GitHub Actions upgrades weekly for
+review and testing before a release. Python package pins are updated by hand
+alongside `extensions-version`.
 
 ## Security
 
 - Uses `pull_request`, not `pull_request_target`.
 - Skips forks by default in the consumer workflow.
-- Does not persist checkout credentials.
+- Does not persist checkout credentials for either checkout.
 - Disables shared dependency caching by default.
-- Pins executable dependencies.
-- Grants the GitHub token only repository-read and PR-comment permissions in the
-  consumer workflow.
+- Pins executable dependencies by commit SHA or exact version.
+- Passes PR title and body as environment variables, never interpolated into
+  shell scripts.
+- The consumer workflow grants only `contents: read` plus `pull-requests: write`
+  and `issues: write`, which are the minimum for submitting reviews and
+  maintaining repository memory.
 
 PR content is untrusted input to an agent with terminal and file tools. Keep
 this action advisory, use GitHub-hosted or isolated runners, and do not provide
-unrelated secrets to the review job.
+unrelated secrets to the review job. See [SECURITY.md](SECURITY.md) for
+reporting.
+
+## Development
+
+```bash
+node --test test/*.test.mjs
+```
+
+[`test/contract.test.mjs`](test/contract.test.mjs) is a contract suite: it
+asserts the pinned versions, the security-relevant flags in
+[`action.yml`](action.yml), the follow-up protocol's marker and vocabulary, the
+guidance installer's path-escape rejection, and the example workflow's fork
+guard. CI additionally runs `git diff --check` and
+[actionlint](https://github.com/rhysd/actionlint).
+
+Working conventions for this repository live in [AGENTS.md](AGENTS.md).
