@@ -34,6 +34,13 @@
   full input set.
 - Add `AGENTS.md` and `CLAUDE.md` with repository conventions and the upstream
   divergence list.
+- Skip a review when the pull request carries the configurable `skip-label`.
+  The example and this repository's self-review workflow also short-circuit at
+  job level so a labelled PR never starts a runner.
+- Document `paths-ignore` and its required-status-check caveat in the example.
+- When a prior review commit is missing after a history rewrite, record a
+  `previous_commit_unavailable` no-candidate decision instead of failing
+  memory evaluation.
 
 ## 1.0.0 - 2026-07-30
 

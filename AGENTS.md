@@ -77,12 +77,13 @@ body as env vars rather than shell interpolation. Any change that weakens one of
 these needs an explicit threat-model note in the PR and in
 [SECURITY.md](SECURITY.md).
 
-**The size gate must cover every step.** `Check pull request size` runs first
-and everything after it carries
-`if: steps.size.outputs.oversized != 'true'`. Composite actions cannot return
-early, so a step added without the guard silently runs on pull requests the
-gate was meant to skip. The contract suite asserts guard count equals step
-count minus two; add the guard when you add a step.
+**The size gate must cover every step after the early gates.** `Evaluate skip
+label` runs first, then `Check pull request size`. Every later step carries
+both `steps.skip.outputs.skip != 'true'` and (except the size report step)
+`steps.size.outputs.oversized != 'true'`. Composite actions cannot return
+early, so a step added without the guards silently runs on pull requests the
+gates were meant to skip. The contract suite asserts the size-guard count
+equals step count minus three; add both guards when you add a step.
 
 **`install-guidance.sh` handles attacker-influenced paths.** It rejects absolute
 paths, `..` segments, and symlinks resolving outside the checkout. Changes there

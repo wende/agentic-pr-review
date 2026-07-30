@@ -987,21 +987,25 @@ test('every step after the size gate is gated on it', () => {
   // A step added without the guard would run on an oversized pull request,
   // which is exactly the cost this gate exists to avoid.
   const steps = action.match(/^ {4}- name:/gm) ?? [];
-  // Compound conditions (e.g. memory steps) still count when they include the
-  // size gate; only the exact skip-guard form is required for pure steps.
+  // Compound conditions (e.g. memory steps, skip-label) still count when they
+  // include the size gate.
   const guards =
     action.match(/^ {6}if:.*steps\.size\.outputs\.oversized != 'true'/gm) ?? [];
-  // The gate itself and the oversized report are the only steps without the
-  // skip-review guard. Clear size skip notice uses != 'true' and counts.
-  assert.equal(guards.length, steps.length - 2);
-  assert.match(action, /- name: Check pull request size\n {6}id: size\n/);
+  // Without the size skip-guard: Evaluate skip label, Check pull request size,
+  // and Report an oversized pull request. Clear size skip notice uses != and
+  // counts.
+  assert.equal(guards.length, steps.length - 3);
   assert.match(
     action,
-    /- name: Report an oversized pull request\n {6}if: steps\.size\.outputs\.oversized == 'true'\n/,
+    /- name: Check pull request size\n {6}if: steps\.skip\.outputs\.skip != 'true'\n {6}id: size\n/,
   );
   assert.match(
     action,
-    /- name: Clear size skip notice\n {6}if: steps\.size\.outputs\.oversized != 'true'\n/,
+    /- name: Report an oversized pull request\n {6}if: steps\.skip\.outputs\.skip != 'true' && steps\.size\.outputs\.oversized == 'true'\n/,
+  );
+  assert.match(
+    action,
+    /- name: Clear size skip notice\n {6}if: steps\.skip\.outputs\.skip != 'true' && steps\.size\.outputs\.oversized != 'true'\n/,
   );
   // When under the limit, delete any prior size-skip notice (not edit-only).
   assert.match(action, /<!-- agentic-pr-review-size -->/);
@@ -1054,6 +1058,43 @@ test('size check classifies pull requests against the limit', async () => {
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('a skip label stops every step of the review', () => {
+  assert.match(action, /skip-label:\n(?:.*\n)*?\s+default: skip-review/);
+  assert.match(
+    action,
+    /SKIP: \$\{\{ inputs\.skip-label != '' && contains\(github\.event\.pull_request\.labels\.\*\.name, inputs\.skip-label\) \}\}/,
+  );
+
+  // Skip evaluation must be the first step so no checkout or install runs.
+  const firstStep = action.match(/^ {4}- name: .+$/m)?.[0];
+  assert.match(firstStep ?? '', /Evaluate skip label/);
+  assert.match(action, /^ {4}- name: Evaluate skip label\n\s+id: skip/m);
+
+  const steps = action.match(/^ {4}- name: /gm) ?? [];
+  const guards = action.match(/^ {6}if: .*steps\.skip\.outputs\.skip != 'true'/gm) ?? [];
+  assert.ok(steps.length > 1);
+  // Every step after Evaluate skip label is gated.
+  assert.equal(guards.length, steps.length - 1);
+});
+
+test('automatic example documents path filters and the skip label', () => {
+  assert.match(
+    example,
+    /!contains\(github\.event\.pull_request\.labels\.\*\.name, 'skip-review'\)/,
+  );
+  assert.match(example, /# paths-ignore:/);
+  assert.match(example, /required status check/);
+});
+
+test('self-review workflow shares the example skip-label job guard', () => {
+  // Keep the cheap never-start-a-runner path consistent with the published
+  // example; the action-side skip-label gate still covers custom workflows.
+  assert.match(
+    selfReview,
+    /!contains\(github\.event\.pull_request\.labels\.\*\.name, 'skip-review'\)/,
+  );
 });
 
 test('automatic example reruns on commits without exposing secrets to forks', () => {

@@ -15,7 +15,9 @@ concurrency:
 
 jobs:
   review:
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      !contains(github.event.pull_request.labels.*.name, 'skip-review')
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     continue-on-error: true
