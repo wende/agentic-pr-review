@@ -5,5 +5,6 @@
 - Add automatic OpenHands PR review with MiniMax M3 defaults.
 - Add full-repository and file-level sub-agent inspection.
 - Track resolved, still-present, obsolete, and new findings across reruns.
+- Load consumer-owned skills and optional plain Markdown best-practices files.
 - Pin upstream review code, Python packages, and nested GitHub Actions.
 - Provide an advisory, same-repository automatic workflow example.

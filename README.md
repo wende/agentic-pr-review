@@ -56,6 +56,34 @@ triggers:
 The action injects its versioned follow-up protocol alongside these local
 project rules.
 
+### Plain best-practices file
+
+If a repository already has a plain Markdown guide, it does not need skill
+frontmatter. Point the action at it:
+
+```yaml
+- uses: wende/agentic-pr-review@v1.0.0
+  with:
+    llm-api-key: ${{ secrets.MINIMAX_API_KEY }}
+    github-token: ${{ secrets.GITHUB_TOKEN }}
+    review-guidance-path: .github/review-best-practices.md
+```
+
+The action validates that the path stays inside the checked-out consumer
+repository and wraps the file as a `/codereview` skill for that run.
+
+### Public and specific skills
+
+With `load-public-skills: true`, OpenHands loads its public skill catalog and
+activates relevant skills from the review prompt and repository context. Set it
+to `false` for a smaller, project-only context.
+
+For deterministic skills, commit the exact skill Markdown files to
+`.agents/skills/` in the consumer repository. OpenHands loads those files
+directly; no package installation or network fetch is required. Skills using the
+`/codereview` trigger are active for every review. Other triggers are activated
+when their keywords appear in the review task.
+
 ## Configuration
 
 The default model is `openai/MiniMax-M3` at
@@ -72,6 +100,7 @@ Important inputs:
 | `load-public-skills` | `true` | OpenHands public skill catalog |
 | `collect-feedback` | `true` | Reaction controls in review bodies |
 | `require-evidence` | `false` | Require end-to-end PR evidence |
+| `review-guidance-path` | empty | Plain Markdown review rules from the consumer |
 | `enable-uv-cache` | `false` | Shared dependency cache; disabled for security |
 
 ## Versioning

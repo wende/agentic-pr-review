@@ -37,6 +37,10 @@ inputs:
     description: Require end-to-end evidence in the PR description
     required: false
     default: 'false'
+  review-guidance-path:
+    description: Optional plain Markdown best-practices file in the consumer repository
+    required: false
+    default: ''
   extensions-version:
     description: Pinned OpenHands extensions commit
     required: false
@@ -85,11 +89,13 @@ runs:
 
     - name: Install follow-up review guidance
       shell: bash
+      env:
+        REVIEW_GUIDANCE_PATH: ${{ inputs.review-guidance-path }}
       run: |
-        mkdir -p agentic-review-repo/.agents/skills
-        install -m 0644 \
+        "$GITHUB_ACTION_PATH/scripts/install-guidance.sh" \
+          agentic-review-repo \
           "$GITHUB_ACTION_PATH/skills/follow-up-review.md" \
-          agentic-review-repo/.agents/skills/agentic-review-follow-up.md
+          "$REVIEW_GUIDANCE_PATH"
 
     - name: Set up Python
       uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
