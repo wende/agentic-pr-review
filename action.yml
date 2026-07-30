@@ -19,18 +19,22 @@ inputs:
     description: Model API key
     required: true
   github-token:
-    description: Token used to read PR context and submit reviews
+    description: GitHub token used for PR reviews and repository memory; pass github.token in Actions
     required: true
   use-sub-agents:
     description: Allow the reviewer to delegate large diffs to file-level agents
     required: false
     default: 'true'
+  review-wrap-up-iterations:
+    description: Coordinator iteration after which investigation stops and review publication begins
+    required: false
+    default: '40'
+  max-review-iterations:
+    description: Hard model/tool iteration cutoff for the coordinator and each delegated agent
+    required: false
+    default: '60'
   load-public-skills:
     description: Load the OpenHands public skill catalog
-    required: false
-    default: 'true'
-  collect-feedback:
-    description: Add reaction-based feedback controls to the review body
     required: false
     default: 'true'
   require-evidence:
@@ -39,6 +43,14 @@ inputs:
     default: 'false'
   review-guidance-path:
     description: Optional plain Markdown best-practices file in the consumer repository
+    required: false
+    default: ''
+  memory-enabled:
+    description: Load and update persistent repository review memory through a GitHub issue
+    required: false
+    default: 'true'
+  memory-issue-number:
+    description: Existing memory issue number; when empty, discover or create the repository memory issue
     required: false
     default: ''
   extensions-version:
@@ -97,6 +109,23 @@ runs:
           "$GITHUB_ACTION_PATH/skills/follow-up-review.md" \
           "$REVIEW_GUIDANCE_PATH"
 
+    - name: Prepare persistent review memory
+      id: memory
+      if: inputs.memory-enabled == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        MEMORY_ISSUE_NUMBER: ${{ inputs.memory-issue-number }}
+        REPOSITORY: ${{ github.repository }}
+      run: |
+        if ! "$GITHUB_ACTION_PATH/scripts/prepare-memory.sh" \
+            agentic-review-repo \
+            "$GITHUB_ACTION_PATH/skills/repository-memory.md" \
+            "$REPOSITORY" \
+            "$MEMORY_ISSUE_NUMBER"; then
+          echo "::warning::Persistent review memory is unavailable; continuing without it"
+        fi
+
     - name: Set up Python
       uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
       with:
@@ -113,6 +142,8 @@ runs:
         LLM_API_KEY: ${{ inputs.llm-api-key }}
         GITHUB_TOKEN: ${{ inputs.github-token }}
         LLM_MODEL: ${{ inputs.llm-model }}
+        REVIEW_WRAP_UP_ITERATIONS: ${{ inputs.review-wrap-up-iterations }}
+        MAX_REVIEW_ITERATIONS: ${{ inputs.max-review-iterations }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
       run: |
         if [[ -z "$LLM_API_KEY" ]]; then
@@ -125,6 +156,18 @@ runs:
         fi
         if [[ -z "$LLM_MODEL" ]]; then
           echo "::error::llm-model is required"
+          exit 1
+        fi
+        if [[ ! "$MAX_REVIEW_ITERATIONS" =~ ^[1-9][0-9]*$ ]]; then
+          echo "::error::max-review-iterations must be a positive integer"
+          exit 1
+        fi
+        if [[ ! "$REVIEW_WRAP_UP_ITERATIONS" =~ ^[1-9][0-9]*$ ]]; then
+          echo "::error::review-wrap-up-iterations must be a positive integer"
+          exit 1
+        fi
+        if [[ "$REVIEW_WRAP_UP_ITERATIONS" -ge "$MAX_REVIEW_ITERATIONS" ]]; then
+          echo "::error::review-wrap-up-iterations must be less than max-review-iterations"
           exit 1
         fi
         if [[ -z "$PR_NUMBER" ]]; then
@@ -169,12 +212,13 @@ runs:
         LLM_BASE_URL: ${{ inputs.llm-base-url }}
         REVIEW_STYLE: roasted
         REQUIRE_EVIDENCE: ${{ inputs.require-evidence }}
-        COLLECT_FEEDBACK: ${{ inputs.collect-feedback }}
-        REVIEW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         USE_SUB_AGENTS: ${{ inputs.use-sub-agents }}
+        REVIEW_WRAP_UP_ITERATIONS: ${{ inputs.review-wrap-up-iterations }}
+        MAX_REVIEW_ITERATIONS: ${{ inputs.max-review-iterations }}
         LOAD_PUBLIC_SKILLS: ${{ inputs.load-public-skills }}
         LLM_API_KEY: ${{ inputs.llm-api-key }}
         GITHUB_TOKEN: ${{ inputs.github-token }}
+        GH_TOKEN: ${{ inputs.github-token }}
         LMNR_PROJECT_API_KEY: ${{ inputs.lmnr-api-key }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
         PR_TITLE: ${{ github.event.pull_request.title }}
@@ -184,11 +228,72 @@ runs:
         REPO_NAME: ${{ github.repository }}
       run: |
         cd agentic-review-repo
+        head_commit="$(git rev-parse HEAD)"
+        previous_review_id="$(
+          gh api --paginate --slurp \
+            "repos/${REPO_NAME}/pulls/${PR_NUMBER}/reviews?per_page=100" |
+            jq --arg sha "$head_commit" '
+              (if length > 0 and (.[0] | type) == "array" then add else . end)
+              | map(select(
+                  .commit_id == $sha and
+                  .user.login == "github-actions[bot]"
+                ))
+              | map(.id)
+              | max // 0
+            '
+        )"
         uv run --no-project \
           --with "$OPENHANDS_SDK_PACKAGE" \
           --with "$OPENHANDS_TOOLS_PACKAGE" \
           --with "$LMNR_PACKAGE" \
-          python ../agentic-review-extensions/plugins/pr-review/scripts/agent_script.py
+          python "$GITHUB_ACTION_PATH/scripts/run-agent.py" \
+            ../agentic-review-extensions/plugins/pr-review/scripts/agent_script.py
+
+        "$GITHUB_ACTION_PATH/scripts/ensure-review-marker.sh" \
+          "$REPO_NAME" \
+          "$PR_NUMBER" \
+          "$head_commit" \
+          "$previous_review_id" \
+          /tmp/review.json
+
+    - name: Evaluate repository memory
+      if: inputs.memory-enabled == 'true' && steps.memory.outputs.issue-number != ''
+      shell: bash
+      env:
+        UV_PYTHON: '3.12'
+        OPENHANDS_SDK_PACKAGE: ${{ inputs.openhands-sdk-package }}
+        LLM_MODEL: ${{ inputs.llm-model }}
+        LLM_BASE_URL: ${{ inputs.llm-base-url }}
+        LLM_API_KEY: ${{ inputs.llm-api-key }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        REPO_NAME: ${{ github.repository }}
+        MEMORY_DECISION_PATH: ${{ runner.temp }}/agentic-review-memory-${{ github.run_id }}-${{ github.run_attempt }}.json
+      run: |
+        cd agentic-review-repo
+        uv run --no-project \
+          --with "$OPENHANDS_SDK_PACKAGE" \
+          python "$GITHUB_ACTION_PATH/scripts/evaluate-memory.py" \
+            "$GITHUB_ACTION_PATH/skills/memory-evaluator.md" \
+            "$MEMORY_DECISION_PATH"
+
+    - name: Publish repository memory
+      if: inputs.memory-enabled == 'true' && steps.memory.outputs.issue-number != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        REPO_NAME: ${{ github.repository }}
+        MEMORY_ISSUE_NUMBER: ${{ steps.memory.outputs.issue-number }}
+        MEMORY_DECISION_PATH: ${{ runner.temp }}/agentic-review-memory-${{ github.run_id }}-${{ github.run_attempt }}.json
+      run: |
+        cd agentic-review-repo
+        "$GITHUB_ACTION_PATH/scripts/publish-memory.sh" \
+          "$MEMORY_DECISION_PATH" \
+          "$REPO_NAME" \
+          "$PR_NUMBER" \
+          "$MEMORY_ISSUE_NUMBER" \
+          "$(git rev-parse HEAD)"
 
     - name: Upload review logs
       if: always()

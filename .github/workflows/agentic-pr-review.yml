@@ -20,8 +20,16 @@ jobs:
     timeout-minutes: 35
     continue-on-error: true
     steps:
+      - name: Check out this action
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: Review pull request
-        uses: wende/agentic-pr-review@v1.0.0
+        uses: ./
         with:
           llm-api-key: ${{ secrets.MINIMAX_API_KEY }}
           github-token: ${{ github.token }}
+          memory-issue-number: '1'
+          use-sub-agents: 'false'
+          load-public-skills: 'false'

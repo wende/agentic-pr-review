@@ -44,6 +44,26 @@ reference it in the follow-up summary. Post inline comments for new findings,
 materially changed failure modes, or incomplete fixes that need new evidence.
 Read other reviewers' comments too and do not duplicate still-relevant findings.
 
+## Execution budget
+
+Use the normal investigation window efficiently:
+
+- Start from the supplied changed-file manifest and diff. Batch related file
+  reads, searches, and checks into a single tool action when practical.
+- Do not reread a file, repeat a search, or rerun a check unless new evidence
+  invalidated the earlier result.
+- Inspect dependency implementation only when the changed code relies on an
+  uncertain contract that repository code, documentation, and tests cannot
+  establish.
+
+The runtime will send an environment wrap-up message when the normal
+investigation window is exhausted. Treat that message as a hard phase change:
+stop all investigation, do not inspect any more repository or dependency
+content, and do not run more tests or delegate. Use the remaining grace period
+only to compose, validate, and submit the best evidence-backed marked review
+supported by work already completed. The review is not complete until that
+marked review is posted.
+
 Only report findings caused by the pull request that the author can act on.
 Include concrete evidence: affected path and line, the triggering execution
 path or scenario, and the user-visible consequence. Do not modify the

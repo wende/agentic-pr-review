@@ -19,6 +19,10 @@ Copy [`examples/automatic-review.yml`](examples/automatic-review.yml) to
 Add an Actions secret named `MINIMAX_API_KEY`. For multiple repositories,
 prefer an organization-level secret restricted to the intended repositories.
 
+No separate GitHub token is required. GitHub Actions supplies a short-lived
+`GITHUB_TOKEN` for reading pull requests, publishing reviews, and maintaining
+repository memory.
+
 The example automatically reviews:
 
 - newly opened and reopened PRs;
@@ -65,7 +69,7 @@ frontmatter. Point the action at it:
 - uses: wende/agentic-pr-review@v1.0.0
   with:
     llm-api-key: ${{ secrets.MINIMAX_API_KEY }}
-    github-token: ${{ secrets.GITHUB_TOKEN }}
+    github-token: ${{ github.token }}
     review-guidance-path: .github/review-best-practices.md
 ```
 
@@ -90,6 +94,12 @@ The default model is `openai/MiniMax-M3` at
 `https://api.minimax.io/v1`. Override `llm-model` and `llm-base-url` for another
 LiteLLM-compatible provider.
 
+The default intentionally uses MiniMax's OpenAI-compatible request path. Before
+the reviewer starts, the Action gives OpenHands the native
+`minimax/MiniMax-M3` input and output prices for telemetry only. It does not
+register or reroute the adapter model in LiteLLM, so request and tool-use
+behavior stay unchanged.
+
 Important inputs:
 
 | Input | Default | Purpose |
@@ -97,11 +107,64 @@ Important inputs:
 | `llm-model` | `openai/MiniMax-M3` | LiteLLM model identifier |
 | `llm-base-url` | MiniMax API | OpenAI-compatible endpoint |
 | `use-sub-agents` | `true` | File-level delegation for large reviews |
+| `review-wrap-up-iterations` | `40` | Stop investigation and steer the coordinator to publication |
+| `max-review-iterations` | `60` | Hard turn ceiling for the coordinator and each sub-agent |
 | `load-public-skills` | `true` | OpenHands public skill catalog |
-| `collect-feedback` | `true` | Reaction controls in review bodies |
 | `require-evidence` | `false` | Require end-to-end PR evidence |
 | `review-guidance-path` | empty | Plain Markdown review rules from the consumer |
+| `memory-enabled` | `true` | Load and update persistent repository memory |
+| `memory-issue-number` | empty | Existing memory issue; otherwise discover or create it |
 | `enable-uv-cache` | `false` | Shared dependency cache; disabled for security |
+
+With the defaults, after 40 coordinator iterations the runtime injects an
+environment message that forbids further investigation and directs the agent
+to publish using its existing evidence. The remaining 20 iterations are a
+wrap-up grace period. The hard 60-iteration ceiling still bounds cost, and the
+Action fails the review step if the agent exits without posting a new marked
+review.
+
+## Persistent repository memory
+
+By default, the action discovers or creates an issue named
+`[agentic-pr-review] Repository memory`. The issue body is only a storage marker;
+the versioned Action files are the source of truth for memory behavior.
+Before each review, the action loads up to 100 accepted, marked comments as a
+`/codereview` skill. The main reviewer only consumes memory; it cannot update
+the issue. After a marked review is published, a separate focused model call
+compares inline comments from the immediately previous marked review with the
+changes made since that checkpoint. It must produce a structured candidate or
+an explicit no-candidate decision.
+
+A deterministic publication step validates that a candidate references an
+inline comment belonging to the previous marked review and that its evidence
+paths changed since that review. It then appends at most one memory comment.
+Missing or malformed decisions fail visibly instead of silently skipping
+memory. This adds exactly one focused model call when a follow-up has inline
+comments to evaluate. First reviews and follow-ups without previous inline
+comments need no model call; no-candidate decisions leave the issue unchanged.
+
+Memory comments are append-only to avoid lost updates when different pull
+requests are reviewed concurrently. The loader ignores unmarked comments and
+accepts marked entries only from repository owners, members, collaborators, or
+the built-in `github-actions[bot]`. Pull request text and changed files are
+never sufficient evidence for a memory update. Still-present findings,
+obsolete findings, resolved-thread metadata, and one-off fixes are not stored.
+Each accepted entry records the original review concern, how the implementation
+fixed it, the generalized lesson, and links or paths supporting that conclusion.
+Entries are idempotent by source review-comment ID.
+
+The consumer workflow must grant `issues: write`; the example already does.
+For deterministic setup, create the memory issue once and pass its number:
+
+```yaml
+- uses: wende/agentic-pr-review@v1.0.0
+  with:
+    llm-api-key: ${{ secrets.MINIMAX_API_KEY }}
+    github-token: ${{ github.token }}
+    memory-issue-number: '123'
+```
+
+Set `memory-enabled: 'false'` to run without persistent memory.
 
 ## Versioning
 
@@ -115,7 +178,7 @@ release.
 
 ## Reviewer identity
 
-With `secrets.GITHUB_TOKEN`, reviews appear from `github-actions[bot]`. Pass a
+With `github.token`, reviews appear from `github-actions[bot]`. Pass a
 GitHub App installation token as `github-token` to use a dedicated reviewer name
 and avatar.
 
