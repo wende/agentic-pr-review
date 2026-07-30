@@ -248,7 +248,9 @@ test('permission preflight explains a missing pull-requests scope', () => {
 
 test('action uploads no artifacts', () => {
   // The pinned agent script writes no *.log file and no output/ directory, and
-  // matching upload-artifact catches any reintroduced upload step.
+  // no telemetry key is plumbed, so it writes no laminar_trace_info.json.
+  // Assert on the action rather than a step name, which a rename would slip
+  // past; re-adding any upload should be a deliberate, reviewed change.
   assert.doesNotMatch(action, /upload-artifact/);
   assert.doesNotMatch(action, /\*\.log/);
   assert.doesNotMatch(action, /output\//);
