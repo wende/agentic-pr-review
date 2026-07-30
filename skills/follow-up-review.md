@@ -46,7 +46,7 @@ Read other reviewers' comments too and do not duplicate still-relevant findings.
 
 ## Execution budget
 
-Complete the review in at most 35 tool actions:
+Use the normal investigation window efficiently:
 
 - Start from the supplied changed-file manifest and diff. Batch related file
   reads, searches, and checks into a single tool action when practical.
@@ -55,10 +55,14 @@ Complete the review in at most 35 tool actions:
 - Inspect dependency implementation only when the changed code relies on an
   uncertain contract that repository code, documentation, and tests cannot
   establish.
-- Reserve the final five tool actions to compose, validate, and submit the
-  GitHub review. A review is not complete until that marked review is posted.
-- When the exploration budget is exhausted, stop investigating and submit the
-  best evidence-backed review supported by the work already completed.
+
+The runtime will send an environment wrap-up message when the normal
+investigation window is exhausted. Treat that message as a hard phase change:
+stop all investigation, do not inspect any more repository or dependency
+content, and do not run more tests or delegate. Use the remaining grace period
+only to compose, validate, and submit the best evidence-backed marked review
+supported by work already completed. The review is not complete until that
+marked review is posted.
 
 Only report findings caused by the pull request that the author can act on.
 Include concrete evidence: affected path and line, the triggering execution

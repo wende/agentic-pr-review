@@ -107,7 +107,8 @@ Important inputs:
 | `llm-model` | `openai/MiniMax-M3` | LiteLLM model identifier |
 | `llm-base-url` | MiniMax API | OpenAI-compatible endpoint |
 | `use-sub-agents` | `true` | File-level delegation for large reviews |
-| `max-review-iterations` | `40` | Turn ceiling for the coordinator and each sub-agent |
+| `review-wrap-up-iterations` | `40` | Stop investigation and steer the coordinator to publication |
+| `max-review-iterations` | `60` | Hard turn ceiling for the coordinator and each sub-agent |
 | `load-public-skills` | `true` | OpenHands public skill catalog |
 | `require-evidence` | `false` | Require end-to-end PR evidence |
 | `review-guidance-path` | empty | Plain Markdown review rules from the consumer |
@@ -115,10 +116,12 @@ Important inputs:
 | `memory-issue-number` | empty | Existing memory issue; otherwise discover or create it |
 | `enable-uv-cache` | `false` | Shared dependency cache; disabled for security |
 
-The built-in review protocol budgets at most 35 tool actions for investigation
-and reserves its final actions for publishing. The Action separately enforces
-the iteration ceiling and fails the review step if the agent exits without
-posting a marked review for the current commit.
+With the defaults, after 40 coordinator iterations the runtime injects an
+environment message that forbids further investigation and directs the agent
+to publish using its existing evidence. The remaining 20 iterations are a
+wrap-up grace period. The hard 60-iteration ceiling still bounds cost, and the
+Action fails the review step if the agent exits without posting a new marked
+review.
 
 ## Persistent repository memory
 

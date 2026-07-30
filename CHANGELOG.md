@@ -7,8 +7,9 @@
   validated structured decisions.
 - Add a self-review workflow using the repository's memory issue.
 - Supply MiniMax prices to telemetry without changing its OpenAI-compatible request path.
-- Bound the coordinator and each delegated reviewer to 40 iterations by default.
-- Budget review exploration and verify that the current commit receives a marked review.
+- Steer the coordinator to publish after 40 iterations and enforce a hard
+  60-iteration ceiling.
+- Verify that the current run publishes a new marked review.
 - Remove the unused reaction-based review feedback footer.
 
 ## 1.0.0 - 2026-07-30

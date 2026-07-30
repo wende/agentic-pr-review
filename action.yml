@@ -25,10 +25,14 @@ inputs:
     description: Allow the reviewer to delegate large diffs to file-level agents
     required: false
     default: 'true'
-  max-review-iterations:
-    description: Maximum model/tool iterations for the coordinator and each delegated agent
+  review-wrap-up-iterations:
+    description: Coordinator iteration after which investigation stops and review publication begins
     required: false
     default: '40'
+  max-review-iterations:
+    description: Hard model/tool iteration cutoff for the coordinator and each delegated agent
+    required: false
+    default: '60'
   load-public-skills:
     description: Load the OpenHands public skill catalog
     required: false
@@ -138,6 +142,7 @@ runs:
         LLM_API_KEY: ${{ inputs.llm-api-key }}
         GITHUB_TOKEN: ${{ inputs.github-token }}
         LLM_MODEL: ${{ inputs.llm-model }}
+        REVIEW_WRAP_UP_ITERATIONS: ${{ inputs.review-wrap-up-iterations }}
         MAX_REVIEW_ITERATIONS: ${{ inputs.max-review-iterations }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
       run: |
@@ -155,6 +160,14 @@ runs:
         fi
         if [[ ! "$MAX_REVIEW_ITERATIONS" =~ ^[1-9][0-9]*$ ]]; then
           echo "::error::max-review-iterations must be a positive integer"
+          exit 1
+        fi
+        if [[ ! "$REVIEW_WRAP_UP_ITERATIONS" =~ ^[1-9][0-9]*$ ]]; then
+          echo "::error::review-wrap-up-iterations must be a positive integer"
+          exit 1
+        fi
+        if [[ "$REVIEW_WRAP_UP_ITERATIONS" -ge "$MAX_REVIEW_ITERATIONS" ]]; then
+          echo "::error::review-wrap-up-iterations must be less than max-review-iterations"
           exit 1
         fi
         if [[ -z "$PR_NUMBER" ]]; then
@@ -200,6 +213,7 @@ runs:
         REVIEW_STYLE: roasted
         REQUIRE_EVIDENCE: ${{ inputs.require-evidence }}
         USE_SUB_AGENTS: ${{ inputs.use-sub-agents }}
+        REVIEW_WRAP_UP_ITERATIONS: ${{ inputs.review-wrap-up-iterations }}
         MAX_REVIEW_ITERATIONS: ${{ inputs.max-review-iterations }}
         LOAD_PUBLIC_SKILLS: ${{ inputs.load-public-skills }}
         LLM_API_KEY: ${{ inputs.llm-api-key }}

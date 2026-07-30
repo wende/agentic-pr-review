@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the pinned review agent with bounded turns and telemetry-only pricing."""
+"""Run the pinned review agent with wrap-up steering and bounded turns."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import os
 import runpy
 import sys
 from pathlib import Path
+from types import MethodType
 
 import litellm
 import openhands.sdk
@@ -18,7 +19,63 @@ MODEL_COST_ALIASES = {
     "openai/MiniMax-M3": "minimax/MiniMax-M3",
 }
 
-def configured_symbols(model: str, max_iterations: int) -> tuple[object, object]:
+WRAP_UP_MESSAGE = """\
+The normal review investigation budget is exhausted. Stop investigating now.
+Do not read more files, search, inspect dependencies, run tests, or delegate.
+Using only the evidence already gathered, immediately compose and submit the
+marked GitHub review. You may use tools only to create and post that review.
+If there are no actionable findings, post a concise marked COMMENT review
+stating that. The review is incomplete until it is published."""
+
+
+def steer_agent_to_wrap_up(agent: object, wrap_up_iterations: int) -> None:
+    original_step = agent.step
+    completed_steps = 0
+    wrap_up_sent = False
+
+    def steered_step(
+        _agent: object,
+        conversation: object,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        nonlocal completed_steps, wrap_up_sent
+        if completed_steps >= wrap_up_iterations and not wrap_up_sent:
+            # The SDK run loop holds the conversation-state lock while calling
+            # agent.step(). Mirror its stop-hook feedback path by appending the
+            # environment message directly instead of calling send_message().
+            conversation._on_event(
+                openhands.sdk.MessageEvent(
+                    source="environment",
+                    llm_message=openhands.sdk.Message(
+                        role="user",
+                        content=[
+                            openhands.sdk.TextContent(text=WRAP_UP_MESSAGE),
+                        ],
+                    ),
+                )
+            )
+            wrap_up_sent = True
+            print(
+                "Injected review wrap-up instruction after "
+                f"{completed_steps} completed iterations"
+            )
+        result = original_step(conversation, *args, **kwargs)
+        completed_steps += 1
+        return result
+
+    object.__setattr__(
+        agent,
+        "step",
+        MethodType(steered_step, agent),
+    )
+
+
+def configured_symbols(
+    model: str,
+    wrap_up_iterations: int,
+    max_iterations: int,
+) -> tuple[object, object]:
     canonical_model = MODEL_COST_ALIASES.get(model)
     canonical_info = (
         litellm.model_cost.get(canonical_model)
@@ -46,6 +103,12 @@ def configured_symbols(model: str, max_iterations: int) -> tuple[object, object]
 
     def bounded_conversation(*args: object, **kwargs: object) -> object:
         kwargs.setdefault("max_iteration_per_run", max_iterations)
+        agent = kwargs.get("agent")
+        if agent is None and args:
+            agent = args[0]
+        if agent is None:
+            raise RuntimeError("Conversation requires an agent")
+        steer_agent_to_wrap_up(agent, wrap_up_iterations)
         return original_conversation(*args, **kwargs)
 
     return telemetry_priced_llm, bounded_conversation
@@ -60,14 +123,24 @@ def main() -> None:
         raise SystemExit(f"review agent script not found: {agent_script}")
 
     try:
-        max_iterations = int(os.environ.get("MAX_REVIEW_ITERATIONS", "40"))
+        wrap_up_iterations = int(
+            os.environ.get("REVIEW_WRAP_UP_ITERATIONS", "40")
+        )
+        max_iterations = int(os.environ.get("MAX_REVIEW_ITERATIONS", "60"))
     except ValueError as error:
-        raise SystemExit("MAX_REVIEW_ITERATIONS must be a positive integer") from error
-    if max_iterations < 1:
-        raise SystemExit("MAX_REVIEW_ITERATIONS must be a positive integer")
+        raise SystemExit(
+            "Review iteration limits must be positive integers"
+        ) from error
+    if wrap_up_iterations < 1 or max_iterations < 1:
+        raise SystemExit("Review iteration limits must be positive integers")
+    if wrap_up_iterations >= max_iterations:
+        raise SystemExit(
+            "REVIEW_WRAP_UP_ITERATIONS must be less than MAX_REVIEW_ITERATIONS"
+        )
 
     llm_factory, conversation_factory = configured_symbols(
         os.environ.get("LLM_MODEL", ""),
+        wrap_up_iterations,
         max_iterations,
     )
     agent_globals = runpy.run_path(

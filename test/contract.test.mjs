@@ -74,11 +74,20 @@ test('MiniMax keeps its adapter behavior while supplying telemetry prices', () =
   assert.doesNotMatch(runAgent, /litellm\.register_model/);
 });
 
-test('coordinator and delegated reviews have an iteration ceiling', () => {
+test('coordinator gets a wrap-up phase before the hard iteration ceiling', () => {
+  assert.match(action, /review-wrap-up-iterations:/);
+  assert.match(action, /REVIEW_WRAP_UP_ITERATIONS/);
+  assert.match(action, /review-wrap-up-iterations must be less than max-review-iterations/);
   assert.match(action, /max-review-iterations:/);
-  assert.match(action, /default: '40'/);
+  assert.equal((action.match(/default: '40'/g) ?? []).length, 1);
+  assert.equal((action.match(/default: '60'/g) ?? []).length, 1);
   assert.match(action, /MAX_REVIEW_ITERATIONS/);
   assert.match(runAgent, /max_iteration_per_run/);
+  assert.match(runAgent, /steer_agent_to_wrap_up/);
+  assert.match(runAgent, /Injected review wrap-up instruction/);
+  assert.match(runAgent, /Stop investigating now/);
+  assert.match(runAgent, /MessageEvent/);
+  assert.match(runAgent, /MethodType/);
   assert.match(runAgent, /_agentic_pr_review_upstream/);
   assert.match(runAgent, /agent_main\.__globals__\["Conversation"\]/);
   assert.doesNotMatch(runAgent, /openhands\.sdk\.(LLM|Conversation)\s*=/);
@@ -86,10 +95,11 @@ test('coordinator and delegated reviews have an iteration ceiling', () => {
   assert.match(selfReview, /load-public-skills: 'false'/);
 });
 
-test('review protocol budgets exploration and requires publication', () => {
-  assert.match(skill, /at most 35 tool actions/);
-  assert.match(skill, /Reserve the final five tool actions/);
-  assert.match(skill, /review is not complete until that marked review is posted/);
+test('review protocol obeys the runtime wrap-up phase and requires publication', () => {
+  assert.match(skill, /environment wrap-up message/);
+  assert.match(skill, /hard phase change/);
+  assert.match(skill, /remaining grace period/);
+  assert.match(skill, /review is not complete until that\s+marked review is posted/);
   assert.match(action, /Agent exited without posting a new marked review/);
   assert.match(action, /previous_marked_review_id/);
   assert.match(action, /startsWith|startswith/);
