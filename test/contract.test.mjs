@@ -51,6 +51,11 @@ test('action pins upstream code and matching OpenHands packages', () => {
   assert.match(action, /enable-cache: \$\{\{ inputs\.enable-uv-cache \}\}/);
 });
 
+test('MiniMax uses its native LiteLLM provider metadata', () => {
+  assert.match(action, /default: minimax\/MiniMax-M3/);
+  assert.doesNotMatch(action, /openai\/MiniMax-M3/);
+});
+
 test('follow-up reviews use a stable marker and explicit classifications', () => {
   assert.match(skill, /<!-- agentic-pr-review -->/);
   assert.match(skill, /\*\*resolved\*\*/);

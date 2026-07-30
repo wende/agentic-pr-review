@@ -4,6 +4,7 @@
 
 - Add persistent repository review memory backed by a GitHub issue.
 - Add a self-review workflow using the repository's memory issue.
+- Use LiteLLM's native MiniMax provider for model metadata and cost accounting.
 - Remove the unused reaction-based review feedback footer.
 
 ## 1.0.0 - 2026-07-30

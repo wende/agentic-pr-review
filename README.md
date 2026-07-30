@@ -90,7 +90,7 @@ when their keywords appear in the review task.
 
 ## Configuration
 
-The default model is `openai/MiniMax-M3` at
+The default model is `minimax/MiniMax-M3` at
 `https://api.minimax.io/v1`. Override `llm-model` and `llm-base-url` for another
 LiteLLM-compatible provider.
 
@@ -98,7 +98,7 @@ Important inputs:
 
 | Input | Default | Purpose |
 | --- | --- | --- |
-| `llm-model` | `openai/MiniMax-M3` | LiteLLM model identifier |
+| `llm-model` | `minimax/MiniMax-M3` | LiteLLM model identifier |
 | `llm-base-url` | MiniMax API | OpenAI-compatible endpoint |
 | `use-sub-agents` | `true` | File-level delegation for large reviews |
 | `load-public-skills` | `true` | OpenHands public skill catalog |

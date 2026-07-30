@@ -10,7 +10,7 @@ inputs:
   llm-model:
     description: LiteLLM model identifier
     required: false
-    default: openai/MiniMax-M3
+    default: minimax/MiniMax-M3
   llm-base-url:
     description: OpenAI-compatible model API base URL
     required: false
