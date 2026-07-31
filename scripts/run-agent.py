@@ -294,11 +294,15 @@ def table_cell(value: str) -> str:
 def cost_is_unknown(totals: dict[str, float]) -> bool:
     """Whether spend happened but carries no price.
 
-    A priced model never reports zero cost after real traffic, so tokens
-    without cost mean LiteLLM has no pricing metadata for the model rather
-    than that the review was free. Both the summary and the `cost` output
-    have to agree on this: reporting an unknown spend as `0` is what makes a
-    downstream budget gate pass on a review it could not price.
+    Tokens without cost mean LiteLLM has no pricing metadata for the model,
+    rather than that the review was free. Both the summary and the `cost`
+    output have to agree on this: reporting an unknown spend as `0` is what
+    makes a downstream budget gate pass on a review it could not price.
+
+    A genuinely free model — self-hosted, priced at zero — is reported the
+    same way. LiteLLM represents "no price" and "zero price" identically, so
+    the two cannot be told apart; treating the pair as unknown errs toward the
+    gate failing loudly rather than passing a review nobody priced.
     """
     spent_tokens = totals["input_tokens"] or totals["output_tokens"]
     return not totals["cost"] and bool(spent_tokens)
@@ -395,8 +399,13 @@ def report_usage(
         )
     except Exception as error:
         # Deliberately broad: this runs in a finally, where any raise would
-        # replace the review's own outcome with a reporting failure.
-        print(f"::warning::Could not report review usage: {error}")
+        # replace the review's own outcome with a reporting failure. The
+        # warning itself is guarded for the same reason — a closed or broken
+        # stdout must not become the exception the job reports.
+        try:
+            print(f"::warning::Could not report review usage: {error}")
+        except Exception:
+            pass
 
 
 def main() -> None:

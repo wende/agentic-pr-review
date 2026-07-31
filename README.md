@@ -161,7 +161,8 @@ When LiteLLM carries no pricing metadata for the model, tokens are still
 reported but `cost` is **empty**, and the summary says the cost is unavailable.
 It is deliberately not `0`: a budget gate reading zero would pass a review
 nothing could price. Handle the empty value, as above, rather than defaulting
-it.
+it. A genuinely free model — self-hosted, priced at zero — reports the same
+way, because LiteLLM represents "no price" and "zero price" identically.
 
 The review itself is still consumed as the review GitHub posts on the PR.
 
