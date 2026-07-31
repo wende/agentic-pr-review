@@ -540,7 +540,12 @@ ${body}
     assert.match(failed.summary, /\| Cost \| \$0\.8712 \|/);
     assert.match(failed.summary, /\| Coordinator iterations \| 3 \/ 10 \|/);
     assert.match(failed.summary, /The review did not finish/);
+    // All four outputs, not just cost: a budget gate reading them after a
+    // failed review must not find some of them missing.
     assert.match(failed.output, /^cost=0\.871200$/m);
+    assert.match(failed.output, /^input_tokens=412908$/m);
+    assert.match(failed.output, /^output_tokens=18442$/m);
+    assert.match(failed.output, /^iterations=3$/m);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
