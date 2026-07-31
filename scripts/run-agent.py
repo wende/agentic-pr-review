@@ -26,7 +26,10 @@ Do not read more files, search, inspect dependencies, run tests, or delegate.
 Using only the evidence already gathered, immediately compose and submit the
 marked GitHub review. You may use tools only to create and post that review.
 If there are no actionable findings, post a concise marked COMMENT review
-stating that. The review is incomplete until it is published."""
+stating that. The review is incomplete until it is published. Post it exactly
+once: the response to that call carries no comments array, so a zero comment
+count in it is not a failure. As soon as the call returns a review ID you are
+finished; do not re-post the same body."""
 
 SUBAGENT_WRAP_UP_MESSAGE = """\
 Your investigation budget is exhausted. Stop investigating now. Do not read

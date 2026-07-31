@@ -430,6 +430,28 @@ runs:
           "$previous_review_id" \
           /tmp/review.json
 
+    - name: Collapse duplicate reviews
+      if: steps.skip.outputs.skip != 'true' && steps.size.outputs.oversized != 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        REPO_NAME: ${{ github.repository }}
+      run: |
+        cd agentic-review-repo
+        # The agent publishes its own review, and the POST response carries no
+        # comments array; reading that as a rejection has made it re-post the
+        # whole body once per inline comment. Collapse the extras here so a
+        # protocol the model can misread cannot produce six identical reviews.
+        # Same reasoning as the memory steps: this runs after publication, so a
+        # failure must not turn a delivered review into a red job.
+        if ! "$GITHUB_ACTION_PATH/scripts/dedupe-reviews.sh" \
+          "$REPO_NAME" \
+          "$PR_NUMBER" \
+          "$(git rev-parse HEAD)"; then
+          echo "::warning::Duplicate reviews were not collapsed; the published review is unaffected"
+        fi
+
     - name: Evaluate repository memory
       if: steps.skip.outputs.skip != 'true' && steps.size.outputs.oversized != 'true' && inputs.memory-enabled == 'true' && steps.memory.outputs.issue-number != ''
       shell: bash

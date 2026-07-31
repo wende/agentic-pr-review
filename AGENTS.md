@@ -13,6 +13,7 @@ here and nothing is built or bundled: the repository *is* the action.
 action.yml                  the action itself — inputs, pinned versions, steps
 skills/follow-up-review.md  versioned review protocol injected into consumers
 scripts/install-guidance.sh installs skills into the consumer checkout
+scripts/dedupe-reviews.sh   collapses duplicate reviews the agent published
 examples/automatic-review.yml  the workflow consumers copy
 test/contract.test.mjs      contract tests over all of the above
 .github/workflows/ci.yml    node --test, git diff --check, actionlint
@@ -119,6 +120,8 @@ compatibility surface:
 
 - the `<!-- agentic-pr-review -->` marker, and the legacy
   `<!-- macbeth-openhands-review -->` marker kept for migration;
+- the `<!-- agentic-pr-review-superseded -->` marker `dedupe-reviews.sh` writes
+  over collapsed duplicates, which must never start with the review marker;
 - the `resolved` / `still present` / `obsolete` classification vocabulary.
 
 Changing either breaks follow-up tracking on in-flight PRs. Do not drop the

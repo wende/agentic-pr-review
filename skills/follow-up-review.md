@@ -35,16 +35,48 @@ checkpoint while still examining the complete current pull request:
 
 Keep the review layout the code review instructions already define: taste
 rating, then the issue sections, then the risk assessment and verdict. Add one
-concise `Previous review follow-up` section directly after the taste rating,
-listing resolved, still present, and obsolete findings, or stating that the
-previous review had no actionable findings. Report the findings themselves in
-the sections that layout already provides; do not add a separate list for them.
-On the first marked review, say so briefly and omit the classification.
+`Previous review follow-up` section directly after the taste rating. Settled
+work is counted, not re-narrated, so this section stays short as a pull request
+accumulates reruns:
+
+- one line counting findings that are now resolved or obsolete, naming none of
+  them individually and describing none of the fixes;
+- one line counting findings the author has declined or deferred, naming none
+  of them individually;
+- the still present findings the author has not answered, at most one short
+  line each.
+
+Report the findings themselves in the sections that layout already provides; do
+not add a separate list for them. On the first marked review, say so briefly and
+omit the classification. When the previous review had no actionable findings,
+say that in one line.
+
+An author reply that rejects, defers, or accepts a finding is a standing
+decision for this pull request. Count it once and then leave it alone: do not
+restate it, do not re-argue it, and do not post another inline comment about it,
+on this run or any later one. Raise it again only when new commits change the
+code it covered, and say what changed.
 
 Do not post a duplicate inline comment for an unchanged, still present finding;
 reference it in the follow-up summary. Post inline comments for new findings,
 materially changed failure modes, or incomplete fixes that need new evidence.
 Read other reviewers' comments too and do not duplicate still-relevant findings.
+
+## Publishing the review
+
+Publish exactly once. Submit the body and every inline comment in a single
+`POST /repos/{owner}/{repo}/pulls/{number}/reviews` call.
+
+That response carries no `comments` array. A zero comment count in it is how
+the endpoint always answers; it is not evidence that GitHub rejected the inline
+comments. Never conclude from the response alone that a post failed.
+
+Before acting on any suspicion that comments are missing, list what exists with
+`GET /repos/{owner}/{repo}/pulls/{number}/comments`. If comments really are
+missing, add only those with
+`POST /repos/{owner}/{repo}/pulls/{number}/comments`. Never post a second
+review carrying the same body: duplicate bodies are the single worst outcome
+for a pull request's readability, worse than a missing inline comment.
 
 ## Execution budget
 
@@ -64,7 +96,8 @@ stop all investigation, do not inspect any more repository or dependency
 content, and do not run more tests or delegate. Use the remaining grace period
 only to compose, validate, and submit the best evidence-backed marked review
 supported by work already completed. The review is not complete until that
-marked review is posted.
+marked review is posted, and it is finished the moment the post returns a
+review ID. Stop there; do not verify, re-post, or investigate further.
 
 Only report findings caused by the pull request that the author can act on.
 Include concrete evidence: affected path and line, the triggering execution
