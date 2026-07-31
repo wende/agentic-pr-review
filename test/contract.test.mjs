@@ -1972,7 +1972,7 @@ test('automatic example reruns on commits without exposing secrets to forks', ()
     /github\.event\.pull_request\.head\.repo\.full_name == github\.repository/,
   );
   assert.match(example, /continue-on-error: true/);
-  assert.match(example, /wende\/agentic-pr-review@v1\.1\.0/);
+  assert.match(example, /wende\/agentic-pr-review@v1\.1\.1/);
   assert.match(example, /github-token: \$\{\{ github\.token \}\}/);
 });
 

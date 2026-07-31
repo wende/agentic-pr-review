@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.1.1 - 2026-07-31
+
 - Report cost, token counts, the model, and the coordinator's iteration count
   in the GitHub Actions job summary, so spend is visible on the run page
   instead of buried in the log. The same numbers become action outputs
