@@ -291,6 +291,19 @@ def table_cell(value: str) -> str:
     return escaped.replace("\n", " ").strip()
 
 
+def cost_is_unknown(totals: dict[str, float]) -> bool:
+    """Whether spend happened but carries no price.
+
+    A priced model never reports zero cost after real traffic, so tokens
+    without cost mean LiteLLM has no pricing metadata for the model rather
+    than that the review was free. Both the summary and the `cost` output
+    have to agree on this: reporting an unknown spend as `0` is what makes a
+    downstream budget gate pass on a review it could not price.
+    """
+    spent_tokens = totals["input_tokens"] or totals["output_tokens"]
+    return not totals["cost"] and bool(spent_tokens)
+
+
 def usage_summary(
     model: str,
     totals: dict[str, float],
@@ -298,17 +311,12 @@ def usage_summary(
     max_iterations: int,
     completed: bool,
 ) -> str:
-    cost = totals["cost"]
-    if cost > 0:
-        # Four places keep sub-cent runs legible without printing noise; the
-        # action output carries the full figure for budget gates.
-        rendered_cost = f"${cost:.4f}"
-    elif totals["input_tokens"] or totals["output_tokens"]:
-        # A priced model never reports zero after real traffic, so this is
-        # missing LiteLLM pricing metadata rather than a free review.
+    if cost_is_unknown(totals):
         rendered_cost = "Unavailable — no pricing metadata for this model"
     else:
-        rendered_cost = "$0.0000"
+        # Four places keep sub-cent runs legible without printing noise; the
+        # action output carries the full figure for budget gates.
+        rendered_cost = f"${totals['cost']:.4f}"
 
     rows = [
         ("Model", f"`{table_cell(model)}`"),
@@ -369,12 +377,16 @@ def report_usage(
         )
         print(summary)
         append_env_file("GITHUB_STEP_SUMMARY", summary)
+        # An unpriced model reports no cost rather than a zero one. A budget
+        # gate comparing against an empty string fails loudly, where `0`
+        # would have quietly passed a review nothing could price.
+        cost = "" if cost_is_unknown(totals) else f"{totals['cost']:.6f}"
         append_env_file(
             "GITHUB_OUTPUT",
             "".join(
                 f"{name}={value}\n"
                 for name, value in (
-                    ("cost", f"{totals['cost']:.6f}"),
+                    ("cost", cost),
                     ("input_tokens", totals["input_tokens"]),
                     ("output_tokens", totals["output_tokens"]),
                     ("iterations", usage.iterations),

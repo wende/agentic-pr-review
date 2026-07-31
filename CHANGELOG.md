@@ -10,7 +10,9 @@
   conversation, which already carries delegated sub-agent spend, rather than
   parsed out of upstream's printed summary — a log format with no contract
   behind it that is not printed at all when a review fails. A review that dies
-  partway now reports what it spent before failing.
+  partway now reports what it spent before failing. When LiteLLM has no
+  pricing metadata for the model, `cost` is empty rather than `0`, so a budget
+  gate cannot read an unpriceable review as a free one.
 
 - Collapse duplicate reviews after publication. GitHub answers a review POST
   without a `comments` array; the agent read that zero count as a rejection and

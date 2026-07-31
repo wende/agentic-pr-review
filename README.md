@@ -127,7 +127,7 @@ The same numbers are exposed as action outputs, so a job can gate on them:
 
 | Output | Purpose |
 | --- | --- |
-| `cost` | Accumulated cost in USD, including delegated sub-agents |
+| `cost` | Accumulated cost in USD, including delegated sub-agents; empty when unknown |
 | `input-tokens` | Prompt tokens consumed |
 | `output-tokens` | Completion tokens produced |
 | `iterations` | Coordinator iterations completed |
@@ -139,18 +139,29 @@ The same numbers are exposed as action outputs, so a job can gate on them:
     llm-api-key: ${{ secrets.MINIMAX_API_KEY }}
     github-token: ${{ github.token }}
 - name: Enforce a per-review budget
+  env:
+    COST: ${{ steps.review.outputs.cost }}
   run: |
-    if (( $(echo "${{ steps.review.outputs.cost }} > 2.0" | bc -l) )); then
-      echo "::warning::This review cost ${{ steps.review.outputs.cost }}"
+    if [[ -z "$COST" ]]; then
+      echo "::warning::Review cost is unknown; the model carries no pricing metadata"
+      exit 0
+    fi
+    if (( $(echo "$COST > 2.0" | bc -l) )); then
+      echo "::warning::This review cost \$$COST"
     fi
 ```
 
 The values come from the SDK conversation the review ran in, not from parsing
 log text. Iterations are reported against `max-review-iterations`, so a review
 truncated by the ceiling is visible as such rather than looking complete. A
-review that fails partway still reports what it spent before failing; cost
-reads as unavailable when LiteLLM carries no pricing metadata for the model.
+review that fails partway still reports what it spent before failing.
 Repository memory evaluation runs after the review and is not counted.
+
+When LiteLLM carries no pricing metadata for the model, tokens are still
+reported but `cost` is **empty**, and the summary says the cost is unavailable.
+It is deliberately not `0`: a budget gate reading zero would pass a review
+nothing could price. Handle the empty value, as above, rather than defaulting
+it.
 
 The review itself is still consumed as the review GitHub posts on the PR.
 

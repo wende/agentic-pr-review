@@ -411,7 +411,8 @@ test('model spend reaches the job summary whether or not the review finishes', a
   // already folded into the parent's conversation_stats by TaskManager.
   await writeFile(
     join(openhands, 'sdk.py'),
-    `from copy import copy
+    `import os
+from copy import copy
 
 class MessageEvent:
     def __init__(self, **kwargs):
@@ -436,7 +437,8 @@ class TokenUsage:
     cache_write_tokens = 0
 
 class Metrics:
-    accumulated_cost = 0.8712
+    # Zero stands in for a model LiteLLM carries no pricing metadata for.
+    accumulated_cost = float(os.environ.get("FAKE_COST", "0.8712"))
     accumulated_token_usage = TokenUsage()
 
 class ConversationStats:
@@ -469,7 +471,7 @@ class Conversation:
 `,
   );
 
-  const runReview = async (name, body) => {
+  const runReview = async (name, body, extraEnv = {}) => {
     const upstream = join(root, `${name}.py`);
     const summaryPath = join(root, `${name}-summary.md`);
     const outputPath = join(root, `${name}-output.txt`);
@@ -496,6 +498,7 @@ ${body}
         PYTHONPATH: root,
         REVIEW_WRAP_UP_ITERATIONS: '9',
         SUBAGENT_WRAP_UP_ITERATIONS: '9',
+        ...extraEnv,
       },
     };
     const args = [
@@ -546,6 +549,16 @@ ${body}
     assert.match(failed.output, /^input_tokens=412908$/m);
     assert.match(failed.output, /^output_tokens=18442$/m);
     assert.match(failed.output, /^iterations=3$/m);
+
+    // Tokens without cost means LiteLLM has no price for the model, not a
+    // free review. The output must stay empty rather than report 0, which a
+    // budget gate would read as "under budget" and pass.
+    const unpriced = await runReview('unpriced', '', { FAKE_COST: '0' });
+    assert.equal(unpriced.failure, null);
+    assert.match(unpriced.summary, /\| Cost \| Unavailable/);
+    assert.match(unpriced.summary, /\| Input tokens \| 412,908 \|/);
+    assert.match(unpriced.output, /^cost=$/m);
+    assert.match(unpriced.output, /^input_tokens=412908$/m);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
