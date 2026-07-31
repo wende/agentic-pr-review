@@ -9,7 +9,9 @@ and threads, and can delegate large diffs to file-level sub-agents.
 
 On every rerun it identifies its latest completed review, verifies earlier
 findings against the current HEAD, summarizes what was resolved or remains, and
-adds inline comments only for new or materially changed findings.
+adds inline comments only for new or materially changed findings. Settled work
+is counted rather than restated: resolved findings and findings the author
+declined in a thread reply are not narrated again on later runs.
 
 ## What the action does
 
@@ -30,6 +32,8 @@ The action is a composite action. Each run, in order:
    deleting a pending review — so a permissions problem fails fast rather than
    after a full model run.
 8. Runs the pinned OpenHands PR-review agent script.
+9. Collapses any duplicate review the agent published for the same commit
+   ([`scripts/dedupe-reviews.sh`](scripts/dedupe-reviews.sh)).
 
 Agent progress and the cost summary go to the job log; the action uploads no
 artifacts.
@@ -276,6 +280,22 @@ The follow-up protocol keys off a hidden marker at the top of every review body:
 Reviews starting with the legacy `<!-- macbeth-openhands-review -->` marker are
 also recognized as checkpoints, so existing PRs keep their history across the
 rename.
+
+The agent publishes its own review, and GitHub answers a review POST without a
+`comments` array — a model that reads that zero count as a rejection re-posts
+the whole body once per inline comment. After publication the action keeps the
+newest marked review for the current commit and rewrites the body of every
+other one to:
+
+```html
+<!-- agentic-pr-review-superseded -->
+```
+
+Collapsed reviews no longer carry the review marker, so a later run does not
+mistake one for its checkpoint. Duplicate inline comments from those reviews are
+deleted, except any comment carrying a reply — an answered thread is never
+removed. A rerun on an unchanged commit collapses the previous run's review too,
+so a commit carries one readable review body rather than one per run.
 
 With the defaults, after 40 coordinator iterations *or* 1200 seconds of
 coordinator working time — whichever comes first — the runtime injects an

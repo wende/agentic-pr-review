@@ -51,6 +51,9 @@ const ensureReviewMarker = fileURLToPath(
   new URL('../scripts/ensure-review-marker.sh', import.meta.url),
 );
 const ensureReviewMarkerSource = await readFile(ensureReviewMarker, 'utf8');
+const dedupeReviews = fileURLToPath(
+  new URL('../scripts/dedupe-reviews.sh', import.meta.url),
+);
 const runAgent = await readFile(
   new URL('../scripts/run-agent.py', import.meta.url),
   'utf8',
@@ -595,6 +598,203 @@ fi
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('one run leaves one review body and no duplicate inline comments', async () => {
+  // The agent publishes its own review, and the reviews endpoint answers a
+  // POST without a comments array. Reading that as a rejection has made it
+  // re-post the entire body once per inline comment.
+  const root = await mkdtemp(join(tmpdir(), 'agentic-review-dedupe-'));
+  const bin = join(root, 'bin');
+  const fakeGh = join(bin, 'gh');
+  const reviewsJson = join(root, 'reviews.json');
+  const commentsJson = join(root, 'comments.json');
+  const putRecord = join(root, 'put-record');
+  const deleteRecord = join(root, 'delete-record');
+  const head = 'f'.repeat(40);
+  const old = 'a'.repeat(40);
+  const marker = '<!-- agentic-pr-review -->';
+  const bot = { login: 'github-actions[bot]' };
+  await mkdir(bin);
+  await writeFile(
+    reviewsJson,
+    JSON.stringify([
+      [
+        // The checkpoint from an earlier commit stays readable.
+        { id: 5, commit_id: old, user: bot, body: `${marker}\n\nEarlier.` },
+        { id: 20, commit_id: head, user: bot, body: `${marker}\n\nFindings.` },
+        { id: 21, commit_id: head, user: bot, body: `${marker}\n\nFindings.` },
+        { id: 22, commit_id: head, user: bot, body: `${marker}\n\nFindings.` },
+        // Another workflow's bot review, and a human's, are not ours to touch.
+        { id: 23, commit_id: head, user: bot, body: 'Lint results.' },
+        { id: 24, commit_id: head, user: { login: 'wende' }, body: marker },
+      ],
+    ]),
+  );
+  await writeFile(
+    commentsJson,
+    JSON.stringify([
+      [
+        { id: 100, pull_request_review_id: 20, path: 'a.ts', line: 10, side: 'RIGHT', body: 'Dup finding' },
+        { id: 101, pull_request_review_id: 21, path: 'a.ts', line: 10, side: 'RIGHT', body: 'Dup finding' },
+        { id: 102, pull_request_review_id: 22, path: 'a.ts', line: 10, side: 'RIGHT', body: 'Dup finding' },
+        // 110 carries the author's reply, so it is the survivor of its group.
+        { id: 110, pull_request_review_id: 20, path: 'c.ts', line: 1, side: 'RIGHT', body: 'Threaded' },
+        { id: 111, pull_request_review_id: 21, path: 'c.ts', line: 1, side: 'RIGHT', body: 'Threaded' },
+        { id: 112, pull_request_review_id: 99, in_reply_to_id: 110, path: 'c.ts', line: 1, side: 'RIGHT', body: 'Deferred.' },
+        // 141 answered, so both members of this group survive.
+        { id: 140, pull_request_review_id: 20, path: 'e.ts', line: 2, side: 'RIGHT', body: 'Also threaded' },
+        { id: 141, pull_request_review_id: 21, path: 'e.ts', line: 2, side: 'RIGHT', body: 'Also threaded' },
+        { id: 142, pull_request_review_id: 99, in_reply_to_id: 141, path: 'e.ts', line: 2, side: 'RIGHT', body: 'Wont fix.' },
+        { id: 120, pull_request_review_id: 22, path: 'd.ts', line: 3, side: 'RIGHT', body: 'Unique finding' },
+        // Same text from a review that is not ours.
+        { id: 130, pull_request_review_id: 7, path: 'a.ts', line: 10, side: 'RIGHT', body: 'Dup finding' },
+      ],
+    ]),
+  );
+  await writeFile(
+    fakeGh,
+    `#!/usr/bin/env bash
+set -euo pipefail
+args="$*"
+if [[ "$args" == *"-X PUT"*"/reviews/"* ]]; then
+  review_id="\${args##*/reviews/}"
+  printf '%s ' "\${review_id%% *}" >>"$PUT_RECORD"
+  cat >>"$PUT_RECORD"
+  printf '\\n' >>"$PUT_RECORD"
+  printf '%s\\n' '{}'
+elif [[ "$args" == *"-X DELETE"*"/pulls/comments/"* ]]; then
+  printf '%s\\n' "\${args##*/pulls/comments/}" >>"$DELETE_RECORD"
+elif [[ "$args" == *"/reviews?per_page=100"* ]]; then
+  cat "$REVIEWS_JSON"
+elif [[ "$args" == *"/comments?per_page=100"* ]]; then
+  cat "$COMMENTS_JSON"
+else
+  echo "unexpected gh invocation: $args" >&2
+  exit 2
+fi
+`,
+  );
+  await chmod(fakeGh, 0o755);
+
+  try {
+    await writeFile(putRecord, '');
+    await writeFile(deleteRecord, '');
+    const result = await execFileAsync(
+      dedupeReviews,
+      ['example/repo', '5', head],
+      {
+        env: {
+          ...process.env,
+          GH_TOKEN: 'test-token',
+          PATH: `${bin}:${process.env.PATH}`,
+          PUT_RECORD: putRecord,
+          DELETE_RECORD: deleteRecord,
+          REVIEWS_JSON: reviewsJson,
+          COMMENTS_JSON: commentsJson,
+        },
+      },
+    );
+
+    const puts = (await readFile(putRecord, 'utf8'))
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => {
+        const [id, ...rest] = line.split(' ');
+        return { id, body: JSON.parse(rest.join(' ')).body };
+      });
+    // Newest kept; every older duplicate collapsed, nothing else touched.
+    assert.deepEqual(puts.map((put) => put.id).sort(), ['20', '21']);
+    for (const put of puts) {
+      assert.match(put.body, /^<!-- agentic-pr-review-superseded -->\n\n/);
+      assert.match(put.body, /Duplicate of review #22 on the same commit\./);
+      // A collapsed body must not read as a checkpoint on the next run.
+      assert.doesNotMatch(put.body, /^<!-- agentic-pr-review -->/);
+    }
+
+    const deleted = (await readFile(deleteRecord, 'utf8'))
+      .split('\n')
+      .filter(Boolean)
+      .sort();
+    assert.deepEqual(deleted, ['101', '102', '111']);
+    assert.match(
+      result.stdout,
+      /Kept review #22 for f{40}: collapsed 2 duplicate review\(s\), deleted 3 duplicate comment\(s\)/,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('deduplication is inert when a run posts a single review', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agentic-review-dedupe-single-'));
+  const bin = join(root, 'bin');
+  const fakeGh = join(bin, 'gh');
+  const head = 'b'.repeat(40);
+  await mkdir(bin);
+  await writeFile(
+    fakeGh,
+    `#!/usr/bin/env bash
+set -euo pipefail
+args="$*"
+if [[ "$args" == *"/reviews?per_page=100"* ]]; then
+  printf '%s\\n' '[[{"id":30,"commit_id":"${head}","user":{"login":"github-actions[bot]"},"body":"<!-- agentic-pr-review -->\\n\\nFindings."}]]'
+elif [[ "$args" == *"/comments?per_page=100"* ]]; then
+  printf '%s\\n' '[[{"id":300,"pull_request_review_id":30,"path":"a.ts","line":4,"side":"RIGHT","body":"Only finding"}]]'
+else
+  echo "unexpected gh invocation: $args" >&2
+  exit 2
+fi
+`,
+  );
+  await chmod(fakeGh, 0o755);
+
+  try {
+    const result = await execFileAsync(dedupeReviews, ['example/repo', '5', head], {
+      env: {
+        ...process.env,
+        GH_TOKEN: 'test-token',
+        PATH: `${bin}:${process.env.PATH}`,
+      },
+    });
+    assert.match(
+      result.stdout,
+      /collapsed 0 duplicate review\(s\), deleted 0 duplicate comment\(s\)/,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a duplicate review body cannot fail a job that already published', () => {
+  const reviewIndex = action.indexOf('- name: Run agentic review');
+  const dedupeIndex = action.indexOf('- name: Collapse duplicate reviews');
+  const evaluateIndex = action.indexOf('- name: Evaluate repository memory');
+  assert.ok(dedupeIndex > reviewIndex);
+  assert.ok(dedupeIndex < evaluateIndex);
+  assert.match(action, /scripts\/dedupe-reviews\.sh/);
+  assert.match(
+    action,
+    /::warning::Duplicate reviews were not collapsed; the published review is unaffected/,
+  );
+});
+
+test('the review is published exactly once', () => {
+  // The POST response has no comments array. Reading a zero count there as a
+  // rejection is what produced six identical review bodies on one commit.
+  assert.match(skill, /## Publishing the review/);
+  assert.match(skill, /Publish exactly once/);
+  assert.match(skill, /response carries no `comments` array/);
+  assert.match(skill, /Never post a second\s+review carrying the same body/);
+  assert.match(runAgent, /Post it exactly\nonce/);
+  assert.match(runAgent, /do not re-post the same body/);
+});
+
+test('settled findings are counted once, not restated every rerun', () => {
+  assert.match(skill, /one line counting findings that are now resolved or obsolete/);
+  assert.match(skill, /naming none of\s+them individually/);
+  assert.match(skill, /standing\s+decision for this pull request/);
+  assert.match(skill, /do not post another inline comment about it,\s+on this run or any later one/);
 });
 
 test('persistent memory is prepared and passed to the reviewer', () => {

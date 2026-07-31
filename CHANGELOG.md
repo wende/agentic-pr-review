@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Collapse duplicate reviews after publication. GitHub answers a review POST
+  without a `comments` array; the agent read that zero count as a rejection and
+  re-posted the entire body once per inline comment, leaving six identical
+  8 KB reviews on one commit. The action now keeps the newest marked review for
+  the current commit, rewrites every other one to a one-line
+  `<!-- agentic-pr-review-superseded -->` body, and deletes the duplicate inline
+  comments — never one carrying a reply. Like the memory steps, a failure here
+  cannot turn a published review into a red job.
+- Tell the reviewer the POST response carries no `comments` array, that it is
+  finished the moment the call returns a review ID, and that a second review
+  with the same body is never the right correction. Both the injected protocol
+  and the runtime wrap-up message say so.
+- Count settled follow-up work instead of restating it. Resolved and obsolete
+  findings collapse to a single count line, and a finding the author declined
+  or deferred in a thread reply is counted once and then never restated,
+  re-argued, or re-commented on later runs.
+
 - Never fail a job for a memory failure after the review is published. The
   evaluator degrades to a `no_candidate` decision with reason
   `evaluation_failed` and a `::warning::` instead of raising, and both memory
