@@ -61,6 +61,11 @@ Deliberate divergences to preserve — do not "fix" them back:
 - **`use-sub-agents` defaults to `true`.** Upstream defaults to `false` for cost
   and timeout reasons (extensions#208). Documented in the README; revisit if
   timeouts appear.
+- **Cost is reported, not just printed.** Upstream's `log_cost_summary` writes
+  to stdout on its success path only. `run-agent.py` reads the same numbers off
+  `conversation.conversation_stats` in a `finally` and writes the job summary
+  and the action outputs, so a failed review still accounts for its spend.
+  Never replace that with parsing upstream's log text.
 - **No Laminar telemetry.** Upstream exposes `lmnr-api-key` and uploads a trace
   artifact; we plumb no key, so the export is inert. `lmnr-package` stays pinned
   only because `agent_script.py` imports `lmnr` at module scope — dropping the

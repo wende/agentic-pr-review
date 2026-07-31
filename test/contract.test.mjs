@@ -401,6 +401,167 @@ def main():
   }
 });
 
+test('model spend reaches the job summary whether or not the review finishes', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agentic-usage-'));
+  const openhands = join(root, 'openhands');
+  await mkdir(openhands);
+  await writeFile(join(root, 'litellm.py'), 'model_cost = {}\n');
+  await writeFile(join(openhands, '__init__.py'), '');
+  // Mirrors the SDK shape the numbers are read from: sub-agent metrics are
+  // already folded into the parent's conversation_stats by TaskManager.
+  await writeFile(
+    join(openhands, 'sdk.py'),
+    `from copy import copy
+
+class MessageEvent:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+class Message:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+class TextContent:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+class LLM:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+class TokenUsage:
+    prompt_tokens = 412908
+    completion_tokens = 18442
+    cache_read_tokens = 1024
+    cache_write_tokens = 0
+
+class Metrics:
+    accumulated_cost = 0.8712
+    accumulated_token_usage = TokenUsage()
+
+class ConversationStats:
+    def get_combined_metrics(self):
+        return Metrics()
+
+class FakeAgent:
+    def model_copy(self):
+        return copy(self)
+
+    def step(self, conversation, **kwargs):
+        pass
+
+class Conversation:
+    def __init__(self, agent, max_iteration_per_run=None):
+        self.agent = agent
+        self.conversation_stats = ConversationStats()
+        self.max_iteration_per_run = max_iteration_per_run
+
+    def _on_event(self, event):
+        pass
+
+    def _ensure_agent_ready(self):
+        self.agent = self.agent.model_copy()
+
+    def run(self, steps):
+        self._ensure_agent_ready()
+        for _ in range(steps):
+            self.agent.step(self)
+`,
+  );
+
+  const runReview = async (name, body) => {
+    const upstream = join(root, `${name}.py`);
+    const summaryPath = join(root, `${name}-summary.md`);
+    const outputPath = join(root, `${name}-output.txt`);
+    await writeFile(
+      upstream,
+      `from openhands.sdk import Conversation, FakeAgent, LLM
+
+def main():
+    LLM(model="test-model")
+    conversation = Conversation(FakeAgent())
+    conversation.run(3)
+${body}
+`,
+    );
+    await writeFile(summaryPath, '');
+    await writeFile(outputPath, '');
+    const options = {
+      env: {
+        ...process.env,
+        GITHUB_OUTPUT: outputPath,
+        GITHUB_STEP_SUMMARY: summaryPath,
+        LLM_MODEL: 'test-model',
+        MAX_REVIEW_ITERATIONS: '10',
+        PYTHONPATH: root,
+        REVIEW_WRAP_UP_ITERATIONS: '9',
+        SUBAGENT_WRAP_UP_ITERATIONS: '9',
+      },
+    };
+    const args = [
+      fileURLToPath(new URL('../scripts/run-agent.py', import.meta.url)),
+      upstream,
+    ];
+    const failure = await execFileAsync('python3', args, options).then(
+      () => null,
+      (error) => error,
+    );
+    return {
+      failure,
+      output: await readFile(outputPath, 'utf8'),
+      summary: await readFile(summaryPath, 'utf8'),
+    };
+  };
+
+  try {
+    const finished = await runReview('finished', '');
+    assert.equal(finished.failure, null);
+    assert.match(finished.summary, /### Agentic PR review usage/);
+    assert.match(finished.summary, /\| Model \| `test-model` \|/);
+    assert.match(finished.summary, /\| Cost \| \$0\.8712 \|/);
+    assert.match(finished.summary, /\| Input tokens \| 412,908 \|/);
+    assert.match(finished.summary, /\| Output tokens \| 18,442 \|/);
+    assert.match(finished.summary, /\| Cached input tokens \| 1,024 \|/);
+    // Counted from the steps the wrap-up steering already observes, against
+    // the ceiling, so a truncated review is visible as such.
+    assert.match(finished.summary, /\| Coordinator iterations \| 3 \/ 10 \|/);
+    assert.doesNotMatch(finished.summary, /did not finish/);
+    assert.match(finished.output, /^cost=0\.871200$/m);
+    assert.match(finished.output, /^input_tokens=412908$/m);
+    assert.match(finished.output, /^output_tokens=18442$/m);
+    assert.match(finished.output, /^iterations=3$/m);
+
+    // Upstream reports cost only on its success path and exits non-zero
+    // otherwise, so the spend of a review that dies partway is the case the
+    // job summary most needs to keep.
+    const failed = await runReview('failed', '    raise SystemExit(1)');
+    assert.notEqual(failed.failure, null);
+    assert.equal(failed.failure.code, 1);
+    assert.match(failed.summary, /\| Cost \| \$0\.8712 \|/);
+    assert.match(failed.summary, /\| Coordinator iterations \| 3 \/ 10 \|/);
+    assert.match(failed.summary, /The review did not finish/);
+    assert.match(failed.output, /^cost=0\.871200$/m);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('spend is exposed as action outputs consumers can gate on', () => {
+  // The numbers come from the SDK conversation object; nothing parses the
+  // agent's log text, whose format upstream does not treat as a contract.
+  assert.match(action, /^outputs:$/m);
+  assert.match(action, /value: \$\{\{ steps\.review\.outputs\.cost \}\}/);
+  assert.match(action, /value: \$\{\{ steps\.review\.outputs\.input_tokens \}\}/);
+  assert.match(action, /value: \$\{\{ steps\.review\.outputs\.output_tokens \}\}/);
+  assert.match(action, /value: \$\{\{ steps\.review\.outputs\.iterations \}\}/);
+  assert.match(action, /^ {6}id: review$/m);
+  assert.match(runAgent, /conversation_stats/);
+  assert.match(runAgent, /get_combined_metrics\(\)/);
+  assert.match(runAgent, /accumulated_token_usage/);
+  assert.match(runAgent, /GITHUB_STEP_SUMMARY/);
+  assert.match(runAgent, /report_usage\(usage, model, max_iterations, completed\)/);
+});
+
 test('review protocol obeys the runtime wrap-up phase and requires publication', () => {
   assert.match(skill, /environment wrap-up message/);
   assert.match(skill, /hard phase change/);
