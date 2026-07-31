@@ -99,6 +99,23 @@ inputs:
     required: false
     default: 'false'
 
+# Read back off the SDK conversation after the review, so a job can gate on
+# spend. Empty when the review was skipped by a gate, and best-effort when it
+# failed: whatever was spent before the failure is still reported.
+outputs:
+  cost:
+    description: Accumulated model cost in USD, including delegated sub-agents
+    value: ${{ steps.review.outputs.cost }}
+  input-tokens:
+    description: Prompt tokens consumed by the review
+    value: ${{ steps.review.outputs.input_tokens }}
+  output-tokens:
+    description: Completion tokens produced by the review
+    value: ${{ steps.review.outputs.output_tokens }}
+  iterations:
+    description: Coordinator iterations completed, against max-review-iterations
+    value: ${{ steps.review.outputs.iterations }}
+
 runs:
   using: composite
   steps:
@@ -371,6 +388,7 @@ runs:
 
     - name: Run agentic review
       if: steps.skip.outputs.skip != 'true' && steps.size.outputs.oversized != 'true'
+      id: review
       shell: bash
       env:
         UV_PYTHON: '3.12'

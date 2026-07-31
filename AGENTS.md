@@ -61,6 +61,19 @@ Deliberate divergences to preserve — do not "fix" them back:
 - **`use-sub-agents` defaults to `true`.** Upstream defaults to `false` for cost
   and timeout reasons (extensions#208). Documented in the README; revisit if
   timeouts appear.
+- **Cost is reported, not just printed.** Upstream's `log_cost_summary` writes
+  to stdout on its success path only. `run-agent.py` reads the same numbers off
+  `conversation.conversation_stats` in a `finally` and writes the job summary
+  and the action outputs, so a failed review still accounts for its spend.
+  Never replace that with parsing upstream's log text.
+
+  Reported spend covers sub-agents only because `TaskManager._update_parent_metrics`
+  folds each delegated conversation's metrics into its parent's stats under a
+  `task:` usage id before evicting it. That is an implicit contract like the
+  env-var one: re-check it against the pinned `openhands-tools` on every
+  version bump. Do **not** "harden" this by also summing sub-conversations
+  directly — with the folding in place that double-counts every delegated
+  review, and the contract suite fails on exactly that.
 - **No Laminar telemetry.** Upstream exposes `lmnr-api-key` and uploads a trace
   artifact; we plumb no key, so the export is inert. `lmnr-package` stays pinned
   only because `agent_script.py` imports `lmnr` at module scope — dropping the

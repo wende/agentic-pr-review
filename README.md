@@ -35,8 +35,10 @@ The action is a composite action. Each run, in order:
 9. Collapses any duplicate review the agent published for the same commit
    ([`scripts/dedupe-reviews.sh`](scripts/dedupe-reviews.sh)).
 
-Agent progress and the cost summary go to the job log; the action uploads no
-artifacts.
+10. Writes the run's cost, token counts, and iteration count to the job summary
+    and to the action's outputs.
+
+Agent progress goes to the job log; the action uploads no artifacts.
 
 ## Install
 
@@ -108,8 +110,61 @@ The SDK and tools package versions must be kept in step with each other and with
 `extensions-version`; [`test/contract.test.mjs`](test/contract.test.mjs) asserts
 the pinned values so an unreviewed bump fails CI.
 
-The action declares no outputs. Consume the result through the review GitHub
-posts on the PR.
+### Outputs
+
+Every completed review writes a usage table to the GitHub Actions job summary,
+so spend is visible on the run page without opening the log:
+
+| Metric | Value |
+| --- | --- |
+| Model | `openai/MiniMax-M3` |
+| Cost | $0.8712 |
+| Input tokens | 412,908 |
+| Output tokens | 18,442 |
+| Coordinator iterations | 34 / 60 |
+
+The same numbers are exposed as action outputs, so a job can gate on them:
+
+| Output | Purpose |
+| --- | --- |
+| `cost` | Accumulated cost in USD, including delegated sub-agents; empty when unknown |
+| `input-tokens` | Prompt tokens consumed |
+| `output-tokens` | Completion tokens produced |
+| `iterations` | Coordinator iterations completed |
+
+```yaml
+- id: review
+  uses: wende/agentic-pr-review@v1
+  with:
+    llm-api-key: ${{ secrets.MINIMAX_API_KEY }}
+    github-token: ${{ github.token }}
+- name: Enforce a per-review budget
+  env:
+    COST: ${{ steps.review.outputs.cost }}
+  run: |
+    if [[ -z "$COST" ]]; then
+      echo "::warning::Review cost is unknown; the model carries no pricing metadata"
+      exit 0
+    fi
+    if (( $(echo "$COST > 2.0" | bc -l) )); then
+      echo "::warning::This review cost \$$COST"
+    fi
+```
+
+The values come from the SDK conversation the review ran in, not from parsing
+log text. Iterations are reported against `max-review-iterations`, so a review
+truncated by the ceiling is visible as such rather than looking complete. A
+review that fails partway still reports what it spent before failing.
+Repository memory evaluation runs after the review and is not counted.
+
+When LiteLLM carries no pricing metadata for the model, tokens are still
+reported but `cost` is **empty**, and the summary says the cost is unavailable.
+It is deliberately not `0`: a budget gate reading zero would pass a review
+nothing could price. Handle the empty value, as above, rather than defaulting
+it. A genuinely free model — self-hosted, priced at zero — reports the same
+way, because LiteLLM represents "no price" and "zero price" identically.
+
+The review itself is still consumed as the review GitHub posts on the PR.
 
 ### Oversized pull requests
 
@@ -142,7 +197,8 @@ high token cost and can push long reviews past the job timeout
 The default favours review depth on large diffs. If reviews are timing out
 against the example workflow's 35-minute cap, or model spend is higher than
 expected, set `use-sub-agents: 'false'` first — it is the largest single cost
-lever in this action.
+lever in this action. The job summary reports what each run actually spent, so
+the change can be measured rather than guessed at; see [Outputs](#outputs).
 
 ## Skipping reviews
 
@@ -322,7 +378,9 @@ The `lmnr` package is still installed and pinned only because the pinned agent
 script imports it at module scope — removing it breaks the review before it
 starts. If that import ever becomes optional upstream, drop `lmnr-package` too.
 
-Review progress and the per-run cost summary go to the GitHub Actions job log.
+Review progress goes to the GitHub Actions job log, and the per-run cost and
+token summary to the job summary and the action's outputs — see
+[Outputs](#outputs). Neither leaves GitHub.
 
 ## Persistent repository memory
 

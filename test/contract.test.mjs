@@ -401,6 +401,353 @@ def main():
   }
 });
 
+test('model spend reaches the job summary whether or not the review finishes', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agentic-usage-'));
+  const openhands = join(root, 'openhands');
+  await mkdir(openhands);
+  await writeFile(join(root, 'litellm.py'), 'model_cost = {}\n');
+  await writeFile(join(openhands, '__init__.py'), '');
+  // Mirrors the SDK shape the numbers are read from: sub-agent metrics are
+  // already folded into the parent's conversation_stats by TaskManager.
+  await writeFile(
+    join(openhands, 'sdk.py'),
+    `import os
+from copy import copy
+
+class MessageEvent:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+class Message:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+class TextContent:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+class LLM:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+class TokenUsage:
+    prompt_tokens = 412908
+    completion_tokens = 18442
+    cache_read_tokens = 1024
+    cache_write_tokens = 0
+
+class Metrics:
+    # Zero stands in for a model LiteLLM carries no pricing metadata for.
+    accumulated_cost = float(os.environ.get("FAKE_COST", "0.8712"))
+    accumulated_token_usage = TokenUsage()
+
+class ConversationStats:
+    def get_combined_metrics(self):
+        return Metrics()
+
+class FakeAgent:
+    def model_copy(self):
+        return copy(self)
+
+    def step(self, conversation, **kwargs):
+        pass
+
+class Conversation:
+    def __init__(self, agent, max_iteration_per_run=None):
+        self.agent = agent
+        self.conversation_stats = ConversationStats()
+        self.max_iteration_per_run = max_iteration_per_run
+
+    def _on_event(self, event):
+        pass
+
+    def _ensure_agent_ready(self):
+        self.agent = self.agent.model_copy()
+
+    def run(self, steps):
+        self._ensure_agent_ready()
+        for _ in range(steps):
+            self.agent.step(self)
+`,
+  );
+
+  const runReview = async (name, body, extraEnv = {}) => {
+    const upstream = join(root, `${name}.py`);
+    const summaryPath = join(root, `${name}-summary.md`);
+    const outputPath = join(root, `${name}-output.txt`);
+    await writeFile(
+      upstream,
+      `from openhands.sdk import Conversation, FakeAgent, LLM
+
+def main():
+    LLM(model="test-model")
+    conversation = Conversation(FakeAgent())
+    conversation.run(3)
+${body}
+`,
+    );
+    await writeFile(summaryPath, '');
+    await writeFile(outputPath, '');
+    const options = {
+      env: {
+        ...process.env,
+        GITHUB_OUTPUT: outputPath,
+        GITHUB_STEP_SUMMARY: summaryPath,
+        LLM_MODEL: 'test-model',
+        MAX_REVIEW_ITERATIONS: '10',
+        PYTHONPATH: root,
+        REVIEW_WRAP_UP_ITERATIONS: '9',
+        SUBAGENT_WRAP_UP_ITERATIONS: '9',
+        ...extraEnv,
+      },
+    };
+    const args = [
+      fileURLToPath(new URL('../scripts/run-agent.py', import.meta.url)),
+      upstream,
+    ];
+    const failure = await execFileAsync('python3', args, options).then(
+      () => null,
+      (error) => error,
+    );
+    return {
+      failure,
+      output: await readFile(outputPath, 'utf8'),
+      summary: await readFile(summaryPath, 'utf8'),
+    };
+  };
+
+  try {
+    const finished = await runReview('finished', '');
+    assert.equal(finished.failure, null);
+    assert.match(finished.summary, /### Agentic PR review usage/);
+    assert.match(finished.summary, /\| Model \| `test-model` \|/);
+    assert.match(finished.summary, /\| Cost \| \$0\.8712 \|/);
+    assert.match(finished.summary, /\| Input tokens \| 412,908 \|/);
+    assert.match(finished.summary, /\| Output tokens \| 18,442 \|/);
+    assert.match(finished.summary, /\| Cached input tokens \| 1,024 \|/);
+    // Cache rows are omitted when zero rather than rendered as 0.
+    assert.doesNotMatch(finished.summary, /Cache write tokens/);
+    // Counted from the steps the wrap-up steering already observes, against
+    // the ceiling, so a truncated review is visible as such.
+    assert.match(finished.summary, /\| Coordinator iterations \| 3 \/ 10 \|/);
+    assert.doesNotMatch(finished.summary, /did not finish/);
+    assert.match(finished.output, /^cost=0\.871200$/m);
+    assert.match(finished.output, /^input_tokens=412908$/m);
+    assert.match(finished.output, /^output_tokens=18442$/m);
+    assert.match(finished.output, /^iterations=3$/m);
+
+    // Upstream reports cost only on its success path and exits non-zero
+    // otherwise, so the spend of a review that dies partway is the case the
+    // job summary most needs to keep.
+    const failed = await runReview('failed', '    raise SystemExit(1)');
+    assert.notEqual(failed.failure, null);
+    assert.equal(failed.failure.code, 1);
+    assert.match(failed.summary, /\| Cost \| \$0\.8712 \|/);
+    assert.match(failed.summary, /\| Coordinator iterations \| 3 \/ 10 \|/);
+    assert.match(failed.summary, /The review did not finish/);
+    // All four outputs, not just cost: a budget gate reading them after a
+    // failed review must not find some of them missing.
+    assert.match(failed.output, /^cost=0\.871200$/m);
+    assert.match(failed.output, /^input_tokens=412908$/m);
+    assert.match(failed.output, /^output_tokens=18442$/m);
+    assert.match(failed.output, /^iterations=3$/m);
+
+    // Tokens without cost means LiteLLM has no price for the model, not a
+    // free review. The output must stay empty rather than report 0, which a
+    // budget gate would read as "under budget" and pass.
+    const unpriced = await runReview('unpriced', '', { FAKE_COST: '0' });
+    assert.equal(unpriced.failure, null);
+    assert.match(unpriced.summary, /\| Cost \| Unavailable/);
+    assert.match(unpriced.summary, /\| Input tokens \| 412,908 \|/);
+    assert.match(unpriced.output, /^cost=$/m);
+    assert.match(unpriced.output, /^input_tokens=412908$/m);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('delegated spend is counted once, through the parent conversation', async () => {
+  // `use-sub-agents` defaults to true here, so most spend on a large diff is
+  // a sub-agent's. Those conversations are built by TaskManager, not by the
+  // Conversation rebind, and are never added to usage.conversations: the
+  // reported total covers them only because TaskManager folds each child's
+  // metrics into its parent's stats under a `task:` usage id before evicting
+  // it. Pin both halves of that — the child's spend must appear, and it must
+  // appear once. Summing the child directly as well would double it.
+  const root = await mkdtemp(join(tmpdir(), 'agentic-delegated-usage-'));
+  const openhands = join(root, 'openhands');
+  const task = join(openhands, 'tools', 'task');
+  const upstream = join(root, 'agent_script.py');
+  const summaryPath = join(root, 'summary.md');
+  await mkdir(task, { recursive: true });
+  await writeFile(join(root, 'litellm.py'), 'model_cost = {}\n');
+  await writeFile(join(openhands, '__init__.py'), '');
+  await writeFile(join(openhands, 'tools', '__init__.py'), '');
+  await writeFile(join(task, '__init__.py'), '');
+  await writeFile(join(openhands, 'sdk.py'), `from copy import copy
+
+class MessageEvent:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+class Message:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+class TextContent:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+class LLM:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+class TokenUsage:
+    def __init__(self, prompt_tokens=0, completion_tokens=0):
+        self.prompt_tokens = prompt_tokens
+        self.completion_tokens = completion_tokens
+        self.cache_read_tokens = 0
+        self.cache_write_tokens = 0
+
+class Metrics:
+    def __init__(self, cost=0.0, prompt_tokens=0, completion_tokens=0):
+        self.accumulated_cost = cost
+        self.accumulated_token_usage = TokenUsage(
+            prompt_tokens, completion_tokens
+        )
+
+class ConversationStats:
+    def __init__(self):
+        self.usage_to_metrics = {}
+
+    def get_combined_metrics(self):
+        total = Metrics()
+        for metrics in self.usage_to_metrics.values():
+            total.accumulated_cost += metrics.accumulated_cost
+            total.accumulated_token_usage.prompt_tokens += (
+                metrics.accumulated_token_usage.prompt_tokens
+            )
+            total.accumulated_token_usage.completion_tokens += (
+                metrics.accumulated_token_usage.completion_tokens
+            )
+        return total
+
+class FakeAgent:
+    def model_copy(self):
+        return copy(self)
+
+    def step(self, conversation, **kwargs):
+        pass
+
+class Conversation:
+    def __init__(self, agent, max_iteration_per_run=None):
+        self.agent = agent
+        self.conversation_stats = ConversationStats()
+
+    def _on_event(self, event):
+        pass
+
+    def _ensure_agent_ready(self):
+        self.agent = self.agent.model_copy()
+
+    def run(self, steps):
+        self._ensure_agent_ready()
+        for _ in range(steps):
+            self.agent.step(self)
+`);
+  await writeFile(join(task, 'manager.py'), `from openhands.sdk import Conversation
+
+class TaskManager:
+    def _get_conversation(self, agent, max_iteration_per_run=None):
+        return Conversation(agent)
+`);
+  await writeFile(upstream, `from openhands.sdk import Conversation, FakeAgent, LLM, Metrics
+from openhands.tools.task.manager import TaskManager
+
+def main():
+    LLM(model="test-model")
+    coordinator = Conversation(FakeAgent())
+    coordinator.conversation_stats.usage_to_metrics["pr_review_agent"] = Metrics(
+        1.0, 100, 10
+    )
+    coordinator.run(3)
+
+    delegated = TaskManager()._get_conversation(FakeAgent())
+    delegated.conversation_stats.usage_to_metrics["file_review"] = Metrics(
+        0.25, 50, 5
+    )
+    delegated.run(2)
+    # What TaskManager._update_parent_metrics does before eviction.
+    coordinator.conversation_stats.usage_to_metrics["task:task_00000001"] = (
+        delegated.conversation_stats.get_combined_metrics()
+    )
+`);
+  await writeFile(summaryPath, '');
+
+  try {
+    await execFileAsync(
+      'python3',
+      [
+        fileURLToPath(new URL('../scripts/run-agent.py', import.meta.url)),
+        upstream,
+      ],
+      {
+        env: {
+          ...process.env,
+          GITHUB_STEP_SUMMARY: summaryPath,
+          LLM_MODEL: 'test-model',
+          MAX_REVIEW_ITERATIONS: '10',
+          PYTHONPATH: root,
+          REVIEW_WRAP_UP_ITERATIONS: '9',
+          SUBAGENT_WRAP_UP_ITERATIONS: '9',
+        },
+      },
+    );
+    const summary = await readFile(summaryPath, 'utf8');
+    // 1.00 + 0.25, 100 + 50, 10 + 5 — the delegated review counted exactly
+    // once. Adding the sub-conversation to usage.conversations as well would
+    // report $2.5000 here.
+    assert.match(summary, /\| Cost \| \$1\.2500 \|/);
+    assert.match(summary, /\| Input tokens \| 150 \|/);
+    assert.match(summary, /\| Output tokens \| 15 \|/);
+    // Only the coordinator's steps are counted; sub-agent steering
+    // deliberately gets no ReviewUsage. The two conversations run a different
+    // number of steps on purpose: the counter assigns rather than
+    // accumulates, so a bleed-through makes the last agent to run win instead
+    // of summing. Equal counts would hide that regression entirely — here the
+    // delegated review runs last, so it would report 2 / 10.
+    assert.match(summary, /\| Coordinator iterations \| 3 \/ 10 \|/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('spend is exposed as action outputs consumers can gate on', () => {
+  // The numbers come from the SDK conversation object; nothing parses the
+  // agent's log text, whose format upstream does not treat as a contract.
+  assert.match(action, /^outputs:$/m);
+  assert.match(action, /value: \$\{\{ steps\.review\.outputs\.cost \}\}/);
+  assert.match(action, /value: \$\{\{ steps\.review\.outputs\.input_tokens \}\}/);
+  assert.match(action, /value: \$\{\{ steps\.review\.outputs\.output_tokens \}\}/);
+  assert.match(action, /value: \$\{\{ steps\.review\.outputs\.iterations \}\}/);
+  // Tie the id to the step that actually runs the wrapper. Asserting `id:
+  // review` alone would still pass if the id moved to another step, leaving
+  // every output permanently empty.
+  assert.match(
+    action,
+    /- name: Run agentic review\n {6}if:[^\n]*\n {6}id: review\n/,
+  );
+  assert.match(
+    action.slice(action.indexOf('id: review')),
+    /python "\$GITHUB_ACTION_PATH\/scripts\/run-agent\.py"/,
+  );
+  assert.match(runAgent, /conversation_stats/);
+  assert.match(runAgent, /get_combined_metrics\(\)/);
+  assert.match(runAgent, /accumulated_token_usage/);
+  assert.match(runAgent, /GITHUB_STEP_SUMMARY/);
+  assert.match(runAgent, /report_usage\(usage, model, max_iterations, completed\)/);
+});
+
 test('review protocol obeys the runtime wrap-up phase and requires publication', () => {
   assert.match(skill, /environment wrap-up message/);
   assert.match(skill, /hard phase change/);

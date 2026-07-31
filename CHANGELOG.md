@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Report cost, token counts, the model, and the coordinator's iteration count
+  in the GitHub Actions job summary, so spend is visible on the run page
+  instead of buried in the log. The same numbers become action outputs
+  (`cost`, `input-tokens`, `output-tokens`, `iterations`) that a job can gate
+  on; the action previously declared none. Values are read from the SDK
+  conversation, which already carries delegated sub-agent spend, rather than
+  parsed out of upstream's printed summary — a log format with no contract
+  behind it that is not printed at all when a review fails. A review that dies
+  partway now reports what it spent before failing. When LiteLLM has no
+  pricing metadata for the model, `cost` is empty rather than `0`, so a budget
+  gate cannot read an unpriceable review as a free one.
+
 - Collapse duplicate reviews after publication. GitHub answers a review POST
   without a `comments` array; the agent read that zero count as a rejection and
   re-posted the entire body once per inline comment, leaving six identical
