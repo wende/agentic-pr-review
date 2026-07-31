@@ -670,7 +670,7 @@ def main():
     coordinator.conversation_stats.usage_to_metrics["pr_review_agent"] = Metrics(
         1.0, 100, 10
     )
-    coordinator.run(2)
+    coordinator.run(3)
 
     delegated = TaskManager()._get_conversation(FakeAgent())
     delegated.conversation_stats.usage_to_metrics["file_review"] = Metrics(
@@ -710,6 +710,13 @@ def main():
     assert.match(summary, /\| Cost \| \$1\.2500 \|/);
     assert.match(summary, /\| Input tokens \| 150 \|/);
     assert.match(summary, /\| Output tokens \| 15 \|/);
+    // Only the coordinator's steps are counted; sub-agent steering
+    // deliberately gets no ReviewUsage. The two conversations run a different
+    // number of steps on purpose: the counter assigns rather than
+    // accumulates, so a bleed-through makes the last agent to run win instead
+    // of summing. Equal counts would hide that regression entirely — here the
+    // delegated review runs last, so it would report 2 / 10.
+    assert.match(summary, /\| Coordinator iterations \| 3 \/ 10 \|/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
